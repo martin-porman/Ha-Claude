@@ -1,5 +1,15 @@
 # Ha-Claude — Amira with native Claude Code
 
+> [!WARNING]
+> **Read this before installing.**
+>
+> - **This edition is not suitable for people who use macOS or Windows.**
+> - **This version is for people who take responsibility for their own commands and accept the risks.**
+>   It gives an AI agent unrestricted root access to your Home Assistant host: no permission prompts,
+>   full hardware access, the Docker API, every add-on's data, and an unauthenticated root terminal on port 7681.
+>   A wrong command can break or wipe your Home Assistant installation.
+> - No support, no warranty. If you are not comfortable with that, use the official add-ons instead.
+
 Self-maintained fork of the Amira Home Assistant add-on. Amira is the chat UI inside Home Assistant; here its
 `claude_code` provider runs the real Claude Code CLI with its own tools, skills and settings, and the add-on
 has full access to the Home Assistant host.
