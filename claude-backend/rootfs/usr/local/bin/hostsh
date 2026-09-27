@@ -1,0 +1,20 @@
+#!/bin/bash
+# Run a command as root on the HAOS host (host mount/uts/ipc/net/pid namespaces)
+# via a short-lived privileged helper container on the Docker API.
+# Usage: hostsh 'command ...'   (no argument: prints host uname)
+set -euo pipefail
+SOCK=/run/docker.sock
+API=http://localhost
+cmd="${*:-uname -a}"
+img=$(curl -sf --unix-socket "$SOCK" "$API/containers/$(cat /run/cid)/json" | jq -r .Config.Image)
+name="amira-hostsh-$$-$(date +%s)"
+body=$(jq -n --arg img "$img" --arg cmd "$cmd" '{
+  Image: $img, Tty: true, User: "root", Env: ["TERM=dumb"],
+  Entrypoint: ["nsenter","-t","1","-m","-u","-i","-n","-p","--","/bin/sh","-c",$cmd],
+  HostConfig: {Privileged: true, PidMode: "host", NetworkMode: "host"}}')
+curl -sf --unix-socket "$SOCK" -H 'Content-Type: application/json' -X POST "$API/containers/create?name=$name" -d "$body" >/dev/null
+trap 'curl -s --unix-socket "$SOCK" -X DELETE "$API/containers/$name?force=1" >/dev/null' EXIT
+curl -sf --unix-socket "$SOCK" -X POST "$API/containers/$name/start" >/dev/null
+rc=$(curl -sf --unix-socket "$SOCK" -X POST "$API/containers/$name/wait" | jq -r .StatusCode)
+curl -sf --unix-socket "$SOCK" "$API/containers/$name/logs?stdout=1&stderr=1" | tr -d '\r'
+exit "$rc"

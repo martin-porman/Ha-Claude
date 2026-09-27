@@ -1,0 +1,715 @@
+"""Enhanced provider base with integrated caching, auth, and error handling.
+
+This extends the basic BaseProvider with v3.17.11+ features:
+- Prompt caching integration
+- MCP custom auth support
+- Unified error handling and translations
+- Automatic retry logic
+- Performance statistics
+"""
+
+import json
+import logging
+import re
+import time
+from abc import abstractmethod
+from typing import Any, Dict, Optional, Generator, List
+
+import httpx
+
+from .base import BaseProvider
+from prompt_caching import get_cache_manager
+from mcp_auth import get_mcp_auth_manager
+
+logger = logging.getLogger(__name__)
+
+
+class EnhancedProvider(BaseProvider):
+    """Enhanced provider base with v3.17.11+ enterprise features.
+
+    === PROVIDER CONTRACT ===
+    To add a new OpenAI-compatible provider, subclass this and set class attributes:
+
+        class MyProvider(EnhancedProvider):
+            BASE_URL      = "https://api.example.com/v1"  # required
+            DEFAULT_MODEL = "my-model"                    # required
+            INCLUDE_USAGE = True   # False if API rejects stream_options
+            EXTRA_HEADERS = {}     # any extra HTTP headers (e.g. User-Agent)
+
+            @staticmethod
+            def get_provider_name(): return "example"
+
+            def validate_credentials(self):
+                return (True, "") if self.api_key else (False, "API key missing")
+
+            def get_available_models(self):
+                return ["my-model", "my-model-v2"]
+
+        # OPTIONAL overrides:
+        #   _prepare_messages(messages, intent_info) → List
+        #       Default: inject intent system prompt. Override to add sanitization.
+        #   _get_model() → str
+        #       Default: self.model or self.DEFAULT_MODEL. Override for model renaming.
+
+        # That's it. Tool calling, intent handling, conversation history,
+        # smart context pre-loading, and cost tracking are all automatic.
+    =========================
+    """
+
+    # --- Class attributes for the standard OpenAI-compatible implementation ---
+    # Subclasses set these instead of overriding _do_stream().
+    BASE_URL: str = ""        # API base URL  (e.g. "https://api.mistral.ai/v1")
+    DEFAULT_MODEL: str = ""   # Fallback model when self.model is empty
+    INCLUDE_USAGE: bool = True  # Set False if provider rejects stream_options
+    EXTRA_HEADERS: Dict[str, str] = {}  # Additional HTTP headers
+    MAX_TOKENS: int = 4096    # Default max output tokens (override per-provider)
+
+    def __init__(self, api_key: str = "", model: str = ""):
+        """Initialize enhanced provider."""
+        super().__init__(api_key, model)
+        self.cache_manager = get_cache_manager()
+        self.auth_manager = get_mcp_auth_manager()
+        self.stats = {
+            "requests": 0,
+            "failures": 0,
+            "retries": 0,
+            "cache_hits": 0,
+            "total_tokens": 0,
+        }
+        self.last_error = ""
+        self.last_error_time = 0.0
+
+    def stream_chat_with_caching(
+        self,
+        messages: List[Dict[str, Any]],
+        intent_info: Optional[Dict[str, Any]] = None,
+        max_retries: int = 2,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream chat with automatic retries and caching integration.
+        
+        Args:
+            messages: Conversation messages
+            intent_info: Intent information for caching decisions
+            max_retries: Maximum number of retries on failure
+            
+        Yields:
+            Standard event dictionaries
+        """
+        intent_name = (intent_info or {}).get("intent", "")
+        retry_count = 0
+        last_exception = None
+
+        while retry_count <= max_retries:
+            try:
+                self.stats["requests"] += 1
+
+                # Check if we should use caching for this request
+                if self.cache_manager.should_cache_intent(intent_name):
+                    logger.debug(f"{self.name}: Caching enabled for intent '{intent_name}'")
+
+                # Stream the chat (calls _do_stream, NOT stream_chat, to avoid recursion)
+                for event in self._do_stream(messages, intent_info):
+                    # Record cache usage if present
+                    if event.get("type") == "done" and event.get("usage"):
+                        self._record_cache_usage(event.get("usage"), intent_name)
+
+                    yield event
+
+                # Success - exit retry loop
+                return
+
+            except Exception as e:
+                last_exception = e
+                error_msg = str(e)
+                logger.warning(
+                    f"{self.name}: Request failed (attempt {retry_count + 1}/{max_retries + 1}): {error_msg}"
+                )
+
+                self.stats["failures"] += 1
+                self.last_error = error_msg
+                self.last_error_time = time.time()
+
+                # Check if we should retry
+                if self._should_retry_error(error_msg) and retry_count < max_retries:
+                    self.stats["retries"] += 1
+                    retry_count += 1
+
+                    # Exponential backoff
+                    wait_time = (2 ** retry_count) * 0.5
+                    logger.info(f"{self.name}: Retrying after {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    # Don't retry - yield error
+                    yield self._format_event(
+                        "error",
+                        message=self.normalize_error_message(e)
+                    )
+                    return
+
+        # All retries exhausted
+        if last_exception:
+            yield self._format_event(
+                "error",
+                message=f"{self.name} failed after {max_retries + 1} attempts: {self.normalize_error_message(last_exception)}"
+            )
+
+    @staticmethod
+    def _inject_intent_system_prompt(
+        messages: List[Dict[str, Any]],
+        intent_info: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Prepend (or merge) an intent-specific system message into the messages list.
+
+        Used by OpenAI-compatible providers (Mistral, Groq, DeepSeek, …) that call
+        _openai_compat_stream directly and have no separate system-prompt parameter.
+        For web providers (claude_web, chatgpt_web) this is handled inside stream_chat.
+
+        The prompt text comes from intent_info["prompt"], which is set by
+        INTENT_PROMPTS in intent.py — including the create_html_dashboard prompt.
+        """
+        system_text = (intent_info or {}).get("prompt", "")
+
+        if not system_text:
+            return messages
+
+        # Merge into existing system message or prepend a new one
+        if messages and messages[0].get("role") == "system":
+            merged = system_text + "\n\n" + (messages[0].get("content") or "")
+            return [{"role": "system", "content": merged}] + messages[1:]
+        return [{"role": "system", "content": system_text}] + messages
+
+    def _prepare_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        intent_info: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Prepare messages before sending to the API.
+
+        Default: inject the intent system prompt (from intent_info["prompt"]).
+        Override in subclasses for provider-specific preprocessing
+        (e.g. Groq needs to flatten Anthropic list-content blocks to plain text).
+
+        Always call super()._prepare_messages() to keep the base behaviour.
+        """
+        prepared = self._inject_intent_system_prompt(list(messages), intent_info)
+        # Validate tool messages for OpenAI-compatible APIs
+        return self._validate_tool_messages(prepared)
+    
+    @staticmethod
+    def _validate_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Ensure all tool messages have required tool_call_id field.
+
+        OpenAI-compatible APIs require that every message with role="tool"
+        has a "tool_call_id" field that matches an id in the preceding
+        assistant message's tool_calls array.
+
+        When tool_call_id is missing (e.g. conversations saved by older
+        versions that didn't preserve it), reconstruct it from the
+        preceding assistant+tool_calls message.
+        """
+        validated = []
+        _tc_id_queue: list = []  # IDs from the most recent assistant+tool_calls
+
+        for m in messages:
+            role = m.get("role", "")
+            if role == "assistant" and m.get("tool_calls"):
+                # Build queue of tool_call IDs for the following tool messages
+                _tc_id_queue = []
+                for j, tc in enumerate(m.get("tool_calls", [])):
+                    tc_id = ""
+                    if isinstance(tc, dict):
+                        tc_id = tc.get("id") or ""
+                    if not tc_id:
+                        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                        tc_id = f"call_{fn.get('name', 'tool')}_{j}"
+                    _tc_id_queue.append(tc_id)
+                validated.append(m)
+            elif role == "tool":
+                if not m.get("tool_call_id"):
+                    m = dict(m)  # Make a copy to avoid mutating original
+                    if _tc_id_queue:
+                        m["tool_call_id"] = _tc_id_queue.pop(0)
+                    else:
+                        tool_name = m.get("name", "unknown")
+                        m["tool_call_id"] = f"call_{tool_name}_{len(validated)}"
+                    logger.warning(
+                        f"Tool message missing tool_call_id, reconstructed: {m['tool_call_id']}"
+                    )
+                else:
+                    _tc_id_queue.pop(0) if _tc_id_queue else None  # consume matching entry
+                validated.append(m)
+            else:
+                _tc_id_queue = []  # reset on non-tool/non-assistant messages
+                validated.append(m)
+        return validated
+
+    def _get_model(self) -> str:
+        """Return the model identifier to use for the API call.
+
+        Default: self.model (user setting) falling back to DEFAULT_MODEL.
+        Override to rename/strip prefixes (e.g. GitHub strips 'openai/').
+        """
+        return self.model or self.DEFAULT_MODEL
+
+    def _do_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        intent_info: Optional[Dict[str, Any]] = None,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Standard OpenAI-compatible streaming implementation.
+
+        Uses BASE_URL, DEFAULT_MODEL, INCLUDE_USAGE, EXTRA_HEADERS class
+        attributes plus _prepare_messages() and _get_model() hooks.
+
+        Providers that inherit from EnhancedProvider and set those class
+        attributes do NOT need to override this method — it just works.
+
+        For non-OpenAI-compatible APIs (e.g. Anthropic SDK) override this
+        method with the provider-specific implementation.
+        """
+        if not self.BASE_URL:
+            raise NotImplementedError(
+                f"{self.name}: Set BASE_URL class attribute or override _do_stream().\n"
+                "See the PROVIDER CONTRACT in EnhancedProvider docstring."
+            )
+        msgs = self._prepare_messages(messages, intent_info)
+        tools = self._get_intent_tools(intent_info) or None
+        yield from self._openai_compat_stream(
+            self.BASE_URL,
+            self.api_key,
+            self._get_model(),
+            msgs,
+            tools=tools,
+            extra_headers=self.EXTRA_HEADERS or None,
+            include_usage=self.INCLUDE_USAGE,
+            max_tokens=self.MAX_TOKENS,
+        )
+
+    @staticmethod
+    def _get_intent_tools(intent_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract OpenAI-format tool schemas from intent_info['tool_schemas'].
+
+        Called by provider _do_stream methods to get the tool list to pass
+        to the API. Returns empty list if no tools are available.
+        """
+        return (intent_info or {}).get("tool_schemas") or []
+
+    @staticmethod
+    def _escape_control_chars_in_strings(raw: str) -> str:
+        """Escape raw control chars that often break model-generated JSON."""
+        result: List[str] = []
+        in_string = False
+        i = 0
+        while i < len(raw):
+            c = raw[i]
+            if c == "\\" and in_string:
+                result.append(c)
+                i += 1
+                if i < len(raw):
+                    result.append(raw[i])
+                i += 1
+                continue
+            if c == '"':
+                in_string = not in_string
+                result.append(c)
+            elif in_string and c == "\n":
+                result.append("\\n")
+            elif in_string and c == "\r":
+                result.append("\\r")
+            elif in_string and c == "\t":
+                result.append("\\t")
+            else:
+                result.append(c)
+            i += 1
+        return "".join(result)
+
+    @staticmethod
+    def _repair_json(raw: str) -> str:
+        """Best-effort JSON repair for malformed function-call arguments."""
+        repaired = raw or ""
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        repaired = repaired.replace("True", "true").replace("False", "false").replace("None", "null")
+        repaired = EnhancedProvider._escape_control_chars_in_strings(repaired)
+        return repaired
+
+    @staticmethod
+    def _allowed_tool_names(tools: Optional[List[Dict[str, Any]]]) -> set:
+        allowed = set()
+        for t in tools or []:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function") if "function" in t else t
+            if isinstance(fn, dict):
+                name = str(fn.get("name") or "").strip()
+                if name:
+                    allowed.add(name)
+        return allowed
+
+    @staticmethod
+    def _normalize_tool_calls(
+        tool_calls: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Normalize tool calls to stable {id,name,arguments(JSON string)} dicts."""
+        allowed = EnhancedProvider._allowed_tool_names(tools)
+        normalized: List[Dict[str, Any]] = []
+        for i, tc in enumerate(tool_calls or []):
+            if not isinstance(tc, dict):
+                continue
+            name = str(tc.get("name") or "").strip()
+            if not name:
+                continue
+            if allowed and name not in allowed:
+                logger.warning("tool-call dropped: unknown tool '%s' (allowed=%s)", name, sorted(allowed))
+                continue
+
+            args_raw = tc.get("arguments", {})
+            args_obj: Any = {}
+            if isinstance(args_raw, dict):
+                args_obj = args_raw
+            elif isinstance(args_raw, str):
+                txt = args_raw.strip()
+                if not txt:
+                    args_obj = {}
+                else:
+                    try:
+                        args_obj = json.loads(txt)
+                    except Exception:
+                        try:
+                            args_obj = json.loads(EnhancedProvider._repair_json(txt))
+                        except Exception:
+                            logger.warning("tool-call args malformed for '%s' — using {}", name)
+                            args_obj = {}
+            else:
+                args_obj = {}
+
+            if not isinstance(args_obj, dict):
+                args_obj = {}
+
+            tc_id = str(tc.get("id") or "").strip() or f"call_{name}_{i}"
+            normalized.append({
+                "id": tc_id,
+                "name": name,
+                "arguments": json.dumps(args_obj, ensure_ascii=False),
+            })
+        return normalized
+
+    @staticmethod
+    def _recover_tool_calls_from_text(
+        text: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Recover tool calls from textual artifacts (<tool_call> / JSON blocks)."""
+        txt = (text or "").strip()
+        if not txt:
+            return []
+
+        recovered: List[Dict[str, Any]] = []
+        try:
+            from providers.tool_simulator import extract_tool_calls
+            recovered = extract_tool_calls(txt) or []
+        except Exception:
+            recovered = []
+
+        if not recovered:
+            # Fallback: parse fenced ```json blocks that contain name+arguments.
+            for m in re.finditer(r"```json\s*([\s\S]*?)```", txt, re.IGNORECASE):
+                raw = (m.group(1) or "").strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    try:
+                        obj = json.loads(EnhancedProvider._repair_json(raw))
+                    except Exception:
+                        continue
+                if isinstance(obj, dict) and obj.get("name") and ("arguments" in obj):
+                    recovered.append({
+                        "id": f"call_recovered_{len(recovered)}",
+                        "name": str(obj.get("name")),
+                        "arguments": obj.get("arguments"),
+                    })
+
+        return EnhancedProvider._normalize_tool_calls(recovered, tools=tools)
+
+    @staticmethod
+    def _openai_compat_stream(
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        include_usage: bool = True,
+        max_tokens: Optional[int] = None,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Shared streaming helper for OpenAI-compatible REST APIs.
+
+        Works with OpenAI, NVIDIA NIM, Groq, Mistral, and any provider that
+        speaks the OpenAI chat-completions SSE protocol.
+
+        When `tools` is provided, it is included in the request body and
+        tool_call deltas are accumulated and returned as part of the done event:
+            {"type": "done", "finish_reason": "tool_calls", "tool_calls": [...]}
+        The caller (api.py tool loop) is responsible for executing the tool calls
+        and continuing the conversation.
+        """
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        if max_tokens:
+            # Newer reasoning models (o1, o3, o4, GPT-5) require
+            # 'max_completion_tokens' instead of 'max_tokens'.
+            _NEW_PARAM_MODELS = ("o1", "o3", "o4", "gpt-5", "grok-3")
+            _model_lower = model.lower()
+            if any(m in _model_lower for m in _NEW_PARAM_MODELS):
+                body["max_completion_tokens"] = max_tokens
+            else:
+                body["max_tokens"] = max_tokens
+        if include_usage:
+            body["stream_options"] = {"include_usage": True}
+        if tools:
+            body["tools"] = tools
+        url = base_url.rstrip("/") + "/chat/completions"
+        captured_usage: Optional[Dict[str, Any]] = None
+        # Accumulate streaming tool_call fragments keyed by index
+        accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
+        # Track the real finish_reason from the choices chunk (may arrive
+        # before the usage-only chunk), so we can emit ONE done event
+        # at [DONE] time with both usage and the correct finish_reason.
+        final_finish_reason: Optional[str] = None
+        text_chunks: List[str] = []
+        _done_emitted = False
+        # connect=10s: fallisce subito se il server non risponde
+        # read=120s: i modelli grandi (DeepSeek, Llama 405B) sono lenti ma streamano
+        # pool/write standard
+        _timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0)
+        with httpx.stream("POST", url, headers=headers, json=body, timeout=_timeout) as response:
+            if response.status_code != 200:
+                error_text = response.read().decode("utf-8", errors="ignore")
+                raise RuntimeError(f"HTTP {response.status_code}: {error_text[:400]}")
+            for line in response.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    if data_str == "[DONE]":
+                        done_event: Dict[str, Any] = {
+                            "type": "done",
+                            "finish_reason": final_finish_reason or "stop",
+                        }
+                        if captured_usage:
+                            done_event["usage"] = captured_usage
+                        if accumulated_tool_calls:
+                            # Ensure every tool call has a non-empty id
+                            _tc_list = []
+                            for _idx, _tc in accumulated_tool_calls.items():
+                                if not _tc.get("id"):
+                                    _tc["id"] = f"call_{_tc.get('name', 'tool')}_{_idx}"
+                                _tc_list.append(_tc)
+                            done_event["tool_calls"] = EnhancedProvider._normalize_tool_calls(_tc_list, tools=tools)
+                        if (
+                            not done_event.get("tool_calls")
+                            and tools
+                            and (final_finish_reason or "").lower() in {"malformed_function_call", "function_call"}
+                            and text_chunks
+                        ):
+                            recovered = EnhancedProvider._recover_tool_calls_from_text(
+                                "".join(text_chunks), tools=tools
+                            )
+                            if recovered:
+                                logger.info("Recovered %s tool_call(s) from malformed stream text", len(recovered))
+                                done_event["tool_calls"] = recovered
+                                done_event["finish_reason"] = "tool_calls"
+                        _done_emitted = True
+                        yield done_event
+                    continue
+                try:
+                    event = json.loads(data_str)
+                    # Some providers (e.g. Groq, OpenRouter) embed errors inside the SSE
+                    # stream as {"error": {...}} instead of an HTTP error status.
+                    # If no content has been emitted yet, raise RuntimeError so the
+                    # retry logic in stream_chat_with_caching can retry the full request.
+                    # If content is already streaming, yield the error and stop instead
+                    # (can't retry mid-stream without duplicating output).
+                    if "error" in event and "choices" not in event:
+                        err = event["error"]
+                        msg = (
+                            err.get("message")
+                            or err.get("msg")
+                            or str(err)
+                        ) if isinstance(err, dict) else str(err)
+                        if not text_chunks:
+                            raise RuntimeError(f"HTTP 200 stream error: {msg}")
+                        yield {"type": "error", "message": msg}
+                        return
+                    # Capture usage data — present in last chunk (or a usage-only chunk
+                    # with empty choices when stream_options.include_usage is set).
+                    if event.get("usage"):
+                        captured_usage = event["usage"]
+                    choices = event.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") or {}
+
+                    # Accumulate tool_call fragments (each chunk adds a piece per index)
+                    for tc in (delta.get("tool_calls") or []):
+                        idx = tc.get("index", 0)
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {
+                                "id": tc.get("id", ""),
+                                "name": "",
+                                "arguments": "",
+                            }
+                        if tc.get("id"):
+                            accumulated_tool_calls[idx]["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            accumulated_tool_calls[idx]["name"] += fn["name"]
+                        accumulated_tool_calls[idx]["arguments"] += fn.get("arguments", "")
+
+                    content = delta.get("content")
+                    if content:
+                        text_chunks.append(content)
+                        yield {"type": "text", "text": content}
+                    finish = choice.get("finish_reason")
+                    if finish:
+                        # Save the finish_reason but do NOT yield done yet.
+                        # The usage-only chunk often arrives AFTER this chunk,
+                        # and api.py only processes the first done event.
+                        # We'll emit the combined done at [DONE] time.
+                        final_finish_reason = finish
+                except json.JSONDecodeError:
+                    continue
+            # If the stream ended without a [DONE] sentinel (some providers
+            # just close the connection), emit the done event here so the
+            # UI gets a proper end-of-stream signal.
+            if not _done_emitted and final_finish_reason:
+                done_event = {
+                    "type": "done",
+                    "finish_reason": final_finish_reason,
+                }
+                if captured_usage:
+                    done_event["usage"] = captured_usage
+                if final_finish_reason == "tool_calls" and accumulated_tool_calls:
+                    # Ensure every tool call has a non-empty id
+                    _tc_list = []
+                    for _idx, _tc in accumulated_tool_calls.items():
+                        if not _tc.get("id"):
+                            _tc["id"] = f"call_{_tc.get('name', 'tool')}_{_idx}"
+                        _tc_list.append(_tc)
+                    done_event["tool_calls"] = EnhancedProvider._normalize_tool_calls(_tc_list, tools=tools)
+                if (
+                    not done_event.get("tool_calls")
+                    and tools
+                    and (final_finish_reason or "").lower() in {"malformed_function_call", "function_call"}
+                    and text_chunks
+                ):
+                    recovered = EnhancedProvider._recover_tool_calls_from_text(
+                        "".join(text_chunks), tools=tools
+                    )
+                    if recovered:
+                        logger.info("Recovered %s tool_call(s) from malformed stream text", len(recovered))
+                        done_event["tool_calls"] = recovered
+                        done_event["finish_reason"] = "tool_calls"
+                yield done_event
+
+    def _should_retry_error(self, error_msg: str) -> bool:
+        """Determine if error is retryable via centralized ErrorTranslator."""
+        from .error_handler import ErrorTranslator
+        return ErrorTranslator.is_retryable(error_msg or "", provider=self.name)
+
+    def _record_cache_usage(self, usage: Dict[str, Any], intent_name: str):
+        """Record cache usage statistics."""
+        cache_read = usage.get("cache_read_input_tokens", 0) or 0
+        cache_created = usage.get("cache_creation_input_tokens", 0) or 0
+        output_tokens = usage.get("output_tokens", 0) or 0
+
+        if cache_read > 0:
+            self.stats["cache_hits"] += 1
+            self.cache_manager.record_cache_usage(
+                cache_read_input_tokens=cache_read,
+                cache_creation_input_tokens=0,
+                output_tokens=output_tokens,
+                model=self.model
+            )
+            logger.info(
+                f"{self.name}: Cache hit! {cache_read} tokens from cache (intent={intent_name})"
+            )
+
+        if cache_created > 0:
+            self.cache_manager.record_cache_usage(
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=cache_created,
+                output_tokens=output_tokens,
+                model=self.model
+            )
+            logger.info(
+                f"{self.name}: Cache write {cache_created} tokens (intent={intent_name})"
+            )
+
+        self.stats["total_tokens"] += (cache_read + cache_created + output_tokens)
+
+    def get_auth_headers(self, mcp_server_name: Optional[str] = None) -> Dict[str, str]:
+        """Get authentication headers for MCP server if configured.
+        
+        Args:
+            mcp_server_name: MCP server name to get headers for
+            
+        Returns:
+            Dictionary of auth headers (empty if no MCP auth configured)
+        """
+        if not mcp_server_name:
+            return {}
+
+        try:
+            return self.auth_manager.get_headers_for_server(mcp_server_name)
+        except KeyError:
+            logger.debug(f"{self.name}: MCP server '{mcp_server_name}' not configured")
+            return {}
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get provider statistics."""
+        total_requests = self.stats["requests"]
+        success_rate = (
+            (total_requests - self.stats["failures"]) / total_requests * 100
+            if total_requests > 0
+            else 0
+        )
+
+        return {
+            "provider": self.name,
+            "model": self.model,
+            "requests": self.stats["requests"],
+            "failures": self.stats["failures"],
+            "retries": self.stats["retries"],
+            "cache_hits": self.stats["cache_hits"],
+            "total_tokens": self.stats["total_tokens"],
+            "success_rate": f"{success_rate:.1f}%",
+            "last_error": self.last_error,
+            "last_error_time": self.last_error_time,
+        }
+
+    def reset_statistics(self):
+        """Reset provider statistics."""
+        self.stats = {
+            "requests": 0,
+            "failures": 0,
+            "retries": 0,
+            "cache_hits": 0,
+            "total_tokens": 0,
+        }
+        self.last_error = ""
+        self.last_error_time = 0.0
+        logger.info(f"{self.name}: Statistics reset")

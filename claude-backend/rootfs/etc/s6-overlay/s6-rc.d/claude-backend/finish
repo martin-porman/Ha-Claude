@@ -1,0 +1,46 @@
+#!/usr/bin/with-contenv bashio
+# vim: ft=bash
+# shellcheck shell=bash
+# ==============================================================================
+# Claude Backend finish script
+# - Clean exit (code 0) or SIGTERM (signal 15) → halt the container so HA
+#   Supervisor sees the addon as intentionally stopped.
+# - Unexpected crash (non-zero exit, not SIGTERM) → let s6 restart the service
+#   automatically (up to 5 times; after that, halt to avoid infinite loops).
+# ==============================================================================
+
+EXIT_CODE="$1"
+SIGNAL="$2"
+
+# Normalize: if s6 sends 256 it means the process was killed by a signal
+if test "$EXIT_CODE" -eq 256; then
+    EXIT_CODE=$((128 + SIGNAL))
+fi
+
+# ── Track crash count via a temp file ────────────────────────────────────────
+CRASH_FILE="/tmp/claude_backend_crashes"
+MAX_RESTARTS=5
+
+if test "$EXIT_CODE" -eq 0 || test "$SIGNAL" -eq 15; then
+    # Clean stop (exit 0) or SIGTERM from Supervisor → halt normally
+    bashio::log.info "claude-backend stopped cleanly (code=${EXIT_CODE}, signal=${SIGNAL})."
+    echo "$EXIT_CODE" > /run/s6-linux-init-container-results/exitcode
+    exec /run/s6/basedir/bin/halt
+fi
+
+# Unexpected crash
+CRASHES=0
+if [ -f "$CRASH_FILE" ]; then
+    CRASHES=$(cat "$CRASH_FILE" 2>/dev/null || echo 0)
+fi
+CRASHES=$((CRASHES + 1))
+echo "$CRASHES" > "$CRASH_FILE"
+
+if test "$CRASHES" -gt "$MAX_RESTARTS"; then
+    bashio::log.error "claude-backend crashed $CRASHES times (code=${EXIT_CODE}). Giving up — halting container."
+    echo "$EXIT_CODE" > /run/s6-linux-init-container-results/exitcode
+    exec /run/s6/basedir/bin/halt
+fi
+
+bashio::log.warning "claude-backend crashed (code=${EXIT_CODE}, attempt ${CRASHES}/${MAX_RESTARTS}). Restarting in 5s..."
+sleep 5

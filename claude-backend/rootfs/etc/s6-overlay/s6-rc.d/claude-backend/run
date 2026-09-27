@@ -1,0 +1,136 @@
+#!/usr/bin/with-contenv bashio
+# vim: ft=bash
+# shellcheck shell=bash
+# ==============================================================================
+# Start AI Assistant Backend API
+# ==============================================================================
+bashio::log.info "Starting AI Assistant Backend API..."
+
+# Startup configuration (from config.yaml)
+export DEBUG_MODE=$(bashio::config 'debug_mode')
+export COLORED_LOGS=$(bashio::config 'colored_logs')
+export LOG_LEVEL=$(bashio::config 'log_level')
+
+# API keys (from config.yaml)
+export ANTHROPIC_API_KEY=$(bashio::config 'anthropic_api_key')
+export OPENAI_API_KEY=$(bashio::config 'openai_api_key')
+export GOOGLE_API_KEY=$(bashio::config 'google_api_key')
+export NVIDIA_API_KEY=$(bashio::config 'nvidia_api_key')
+export GITHUB_TOKEN=$(bashio::config 'github_token')
+export GROQ_API_KEY=$(bashio::config 'groq_api_key')
+export MISTRAL_API_KEY=$(bashio::config 'mistral_api_key')
+export OPENROUTER_API_KEY=$(bashio::config 'openrouter_api_key')
+export DEEPSEEK_API_KEY=$(bashio::config 'deepseek_api_key')
+export XAI_API_KEY=$(bashio::config 'xai_api_key')
+export MINIMAX_API_KEY=$(bashio::config 'minimax_api_key')
+export AIHUBMIX_API_KEY=$(bashio::config 'aihubmix_api_key')
+export SILICONFLOW_API_KEY=$(bashio::config 'siliconflow_api_key')
+export VOLCENGINE_API_KEY=$(bashio::config 'volcengine_api_key')
+export DASHSCOPE_API_KEY=$(bashio::config 'dashscope_api_key')
+export MOONSHOT_API_KEY=$(bashio::config 'moonshot_api_key')
+export ZHIPU_API_KEY=$(bashio::config 'zhipu_api_key')
+export PERPLEXITY_API_KEY=$(bashio::config 'perplexity_api_key')
+export CUSTOM_API_KEY=$(bashio::config 'custom_api_key')
+export CUSTOM_API_BASE=$(bashio::config 'custom_api_base')
+export CUSTOM_MODEL_NAME=$(bashio::config 'custom_model_name')
+export OLLAMA_BASE_URL=$(bashio::config 'ollama_base_url')
+export OLLAMA_API_KEY=$(bashio::config 'ollama_api_key')
+# OAuth-only providers
+export GITHUB_COPILOT_TOKEN=""
+export OPENAI_CODEX_TOKEN=""
+
+# SUPERVISOR_TOKEN: injected by HA Supervisor, fallback via bashio
+if [[ -z "${SUPERVISOR_TOKEN:-}" ]]; then
+    SUPERVISOR_TOKEN="${HASSIO_TOKEN:-}"
+fi
+if [[ -z "${SUPERVISOR_TOKEN:-}" ]]; then
+    SUPERVISOR_TOKEN=$(bashio::api.supervisor_token 2>/dev/null || true)
+fi
+export SUPERVISOR_TOKEN
+
+bashio::log.info "DEBUG_MODE: ${DEBUG_MODE}"
+bashio::log.info "LOG_LEVEL: ${LOG_LEVEL}"
+bashio::log.info "SUPERVISOR_TOKEN: $([ -n "${SUPERVISOR_TOKEN}" ] && echo 'present' || echo 'MISSING')"
+bashio::log.info "Runtime settings managed via /config/amira/settings.json"
+
+# ── Claude Code CLI (provider "claude_code": Claude Pro/Max subscription) ─────
+# Credentials from `claude auth login` live in CLAUDE_CONFIG_DIR; the
+# long-lived `claude setup-token` token comes from the add-on option.
+export CLAUDE_CONFIG_DIR=/data/claude
+CLAUDE_CODE_HOME=/data/claude-home
+CLAUDE_CODE_NATIVE_BIN="${CLAUDE_CODE_HOME}/.local/bin/claude"
+mkdir -p "${CLAUDE_CONFIG_DIR}" "${CLAUDE_CODE_HOME}" /data/claude-work
+chmod 700 "${CLAUDE_CONFIG_DIR}" "${CLAUDE_CODE_HOME}"
+
+_cc_token=$(bashio::config 'claude_code_oauth_token' '')
+if [[ -n "${_cc_token}" && "${_cc_token}" != "null" ]]; then
+    export CLAUDE_CODE_OAUTH_TOKEN="${_cc_token}"
+    bashio::log.info "Claude Code: OAuth token configured via add-on option"
+elif [[ "${ANTHROPIC_API_KEY:-}" == sk-ant-oat* ]]; then
+    # A subscription OAuth token pasted into anthropic_api_key is not an API
+    # key; the Messages API rejects it. Hand it to the Claude Code CLI instead.
+    export CLAUDE_CODE_OAUTH_TOKEN="${ANTHROPIC_API_KEY}"
+    export ANTHROPIC_API_KEY=""
+    bashio::log.info "Claude Code: OAuth token found in anthropic_api_key; using it for the claude_code provider"
+else
+    unset CLAUDE_CODE_OAUTH_TOKEN
+fi
+unset _cc_token
+
+# A native install being present (+x) is not the same as it running: a libc
+# mismatch makes it abort on launch. The provider also re-checks this and
+# falls back to the bundled /usr/local/bin/claude.
+claude_code_native_runs() {
+    HOME="${CLAUDE_CODE_HOME}" timeout 10 "${CLAUDE_CODE_NATIVE_BIN}" --version >/dev/null 2>&1
+}
+
+# Keep the current version plus the newest one; each is ~250 MB in backups.
+claude_code_prune_versions() {
+    local versions_dir="${CLAUDE_CODE_HOME}/.local/share/claude/versions"
+    [[ -d "${versions_dir}" ]] || return 0
+    local active newest entry
+    active=$(readlink -f "${CLAUDE_CODE_NATIVE_BIN}" 2>/dev/null || true)
+    newest="${versions_dir}/$(ls -1t "${versions_dir}" 2>/dev/null | head -1)"
+    for entry in "${versions_dir}"/*; do
+        [[ -e "${entry}" ]] || continue
+        [[ "${entry}" == "${active}" || "${entry}" == "${newest}" ]] && continue
+        rm -rf "${entry}"
+    done
+}
+
+# Install/update a persistent native Claude Code in /data — in the background,
+# never blocking startup. The installer is downloaded to a file and run with
+# stdin from /dev/null so no child can block reading a pipe.
+if [[ "$(bashio::config 'claude_code_auto_update' 'true')" == "true" ]]; then
+    (
+        export HOME="${CLAUDE_CODE_HOME}"
+        if [[ -x "${CLAUDE_CODE_NATIVE_BIN}" ]] && claude_code_native_runs; then
+            "${CLAUDE_CODE_NATIVE_BIN}" update </dev/null >/dev/null 2>&1 || true
+        else
+            rm -f "${CLAUDE_CODE_NATIVE_BIN}"
+            installer=$(mktemp /tmp/claude-install.XXXXXX)
+            if curl -fsSL --connect-timeout 10 https://claude.ai/install.sh -o "${installer}"; then
+                bash "${installer}" </dev/null >/dev/null 2>&1 || true
+            fi
+            rm -f "${installer}"
+        fi
+        if [[ -x "${CLAUDE_CODE_NATIVE_BIN}" ]] && ! claude_code_native_runs; then
+            bashio::log.warning "Claude Code: persistent install does not run in this image; using the bundled copy"
+            rm -f "${CLAUDE_CODE_NATIVE_BIN}"
+        elif [[ -x "${CLAUDE_CODE_NATIVE_BIN}" ]]; then
+            bashio::log.info "Claude Code (persistent): $("${CLAUDE_CODE_NATIVE_BIN}" --version 2>/dev/null || echo 'version unknown')"
+        else
+            bashio::log.info "Claude Code: persistent install unavailable; using the bundled copy"
+        fi
+        claude_code_prune_versions
+    ) &
+else
+    bashio::log.info "Claude Code auto-update disabled; using $( [[ -x "${CLAUDE_CODE_NATIVE_BIN}" ]] && echo 'persistent' || echo 'bundled' ) Claude Code"
+fi
+
+# Remove macOS AppleDouble metadata files (._*) that Finder creates on SMB/AFP shares
+find /app/translations -name '._*' -delete 2>/dev/null || true
+
+cd /app
+
+exec python3 server.py

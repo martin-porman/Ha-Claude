@@ -1,0 +1,165 @@
+configuration:
+
+  language:
+    name: Idioma
+    description: Idioma de respuestas de IA (Inglés, Italiano, Español o Francés)
+
+  anthropic_api_key:
+    name: Clave API Anthropic
+    description: Clave API de console.anthropic.com (guarda aunque no uses, para cambio rápido)
+  openai_api_key:
+    name: Clave API OpenAI
+    description: Clave API de platform.openai.com (guarda aunque no uses, para cambio rápido)
+  google_api_key:
+    name: Clave API Google
+    description: Clave API de aistudio.google.com (guarda aunque no uses, para cambio rápido)
+  github_token:
+    name: Token GitHub
+    description: Personal Access Token de github.com/settings/tokens (guarda aunque no uses, para cambio rápido)
+  nvidia_api_key:
+    name: Clave API NVIDIA
+    description: Clave API de build.nvidia.com (gratuita - guarda aunque no uses, para cambio rápido)
+  groq_api_key:
+    name: Clave API Groq
+    description: "Proveedor LLM gratuito y rápido con transcripción de voz Whisper incluida - obtén en console.groq.com"
+  mistral_api_key:
+    name: Clave API Mistral
+    description: "Modelos open-source rápidos de Mistral - obtén en console.mistral.ai"
+  openrouter_api_key:
+    name: Clave API OpenRouter
+    description: "Gateway global con acceso a 100+ modelos de todos los proveedores (Claude, GPT, Llama, Mistral, etc.) - obtén en openrouter.ai"
+  deepseek_api_key:
+    name: Clave API DeepSeek
+    description: "Modelos rápidos y económicos con razonamiento avanzado (R1, V3) - obtén en platform.deepseek.com"
+  xai_api_key:
+    name: Clave API xAI
+    description: "Clave API de xAI para modelos Grok (Grok-3, Grok-3 Mini) - obtén en console.x.ai"
+  minimax_api_key:
+    name: Clave API MiniMax
+    description: "Proveedor LLM chino avanzado con soporte multimodal - obtén en platform.minimax.io"
+  aihubmix_api_key:
+    name: Clave API AiHubMix
+    description: "Gateway API universal con acceso a todos los modelos principales (ChatGPT, Claude, Gemini, etc.) - obtén en aihubmix.com"
+  siliconflow_api_key:
+    name: Clave API SiliconFlow
+    description: "Gateway chino con acceso a modelos open-source (Qwen, Llama, Mistral) a alta velocidad - obtén en siliconflow.cn"
+  volcengine_api_key:
+    name: Clave API VolcEngine
+    description: "Gateway empresarial de Aliyun para LLM - obtén en volcengine.com"
+  dashscope_api_key:
+    name: Clave API DashScope
+    description: "Modelos Qwen de Aliyun con soporte visión/multimodal - obtén en dashscope.console.aliyun.com"
+  moonshot_api_key:
+    name: Clave API Moonshot
+    description: "Modelo Kimi de Moonshot (razonamiento rápido, mejor para chino) - obtén en platform.moonshot.cn"
+  zhipu_api_key:
+    name: Clave API Zhipu
+    description: "Modelos GLM de Zhipu con soporte visión - obtén en open.bigmodel.cn"
+  perplexity_api_key:
+    name: Clave API Perplexity
+    description: "Modelos Sonar con búsqueda web en tiempo real (sonar-pro, sonar-reasoning-pro, r1-1776) - obtén en perplexity.ai/api"
+  claude_code_oauth_token:
+    name: "Token OAuth de Claude Code (suscripción)"
+    description: "Opcional. Usa tu suscripción Claude Pro/Max mediante la CLI oficial Claude Code: ejecuta `claude setup-token` en un ordenador con Claude Code y pega aquí el token sk-ant-oat01-… (o en la UI de Amira con el botón 🔑)"
+  claude_code_auto_update:
+    name: "Actualización automática de Claude Code"
+    description: "Mantiene en /data una copia persistente y actualizada de la CLI Claude Code (usa la incluida si no arranca)"
+
+  custom_api_key:
+    name: Clave API Endpoint Personalizado
+    description: "Clave API para tu endpoint compatible con OpenAI (ej. LM Studio, vLLM, LocalAI) - dejar vacío si no usas un endpoint personalizado"
+  custom_api_base:
+    name: URL Base Endpoint Personalizado
+    description: "URL base de tu API compatible con OpenAI (ej. http://localhost:1234/v1) - dejar vacío si no usas un endpoint personalizado"
+  custom_model_name:
+    name: Nombre del Modelo Personalizado
+    description: "Identificador del modelo a enviar a tu endpoint (ej. mistral-7b-instruct, llama3) - dejar vacío si no usas un endpoint personalizado"
+
+  ollama_base_url:
+    name: URL del Servidor Ollama
+    description: "URL del servidor Ollama local (predeterminado: http://localhost:11434) - sin clave API, ejecución local"
+
+  nvidia_thinking_mode:
+    name: Modo Thinking NVIDIA
+    description: "Habilita modo thinking para ver el proceso de razonamiento de la IA (más lento pero más transparente)"
+  anthropic_extended_thinking:
+    name: Pensamiento Extendido Anthropic
+    description: "Habilitar pensamiento extendido de Claude Opus para tareas de razonamiento complejo (más lento, usa más tokens)"
+  anthropic_prompt_caching:
+    name: Caché de Prompt Anthropic
+    description: "Cachea instrucciones largas y repetitivas para ahorrar costes y mejorar la velocidad de respuesta"
+  openai_extended_thinking:
+    name: Pensamiento Extendido OpenAI
+    description: "Habilitar modo razonamiento o1/o3 para resolución de problemas complejos (más lento, usa más tokens)"
+
+  enable_file_access:
+    name: Habilitar Acceso a Archivos
+    description: Permitir a la IA leer/escribir archivos de configuración de Home Assistant (automatizaciones, scripts, YAML)
+  enable_memory:
+    name: Habilitar Memoria
+    description: "[EXPERIMENTAL] Habilita memoria persistente: la IA solo recuerda lo que escribes en MEMORY.md entre sesiones. Las conversaciones pasadas NUNCA se inyectan en el prompt."
+  enable_file_upload:
+    name: Habilitar Subida de Archivos
+    description: "[EXPERIMENTAL] Permitir subir documentos (PDF, DOCX, TXT, MD, YAML) para análisis de la IA"
+  enable_voice_input:
+    name: Habilitar Entrada de Voz
+    description: "Habilitar botón de micrófono para mensajes de voz (Groq Whisper, con fallback OpenAI/Google) - requiere HTTPS"
+  tts_voice:
+    name: Tipo de Voz
+    description: "Elige la voz para las respuestas habladas: female = voz femenina (Elvira), male = voz masculina (Álvaro). La voz se selecciona automáticamente según tu idioma (Edge TTS - gratis, sin API key)."
+  enable_rag:
+    name: Habilitar RAG
+    description: "[EXPERIMENTAL] Habilitar RAG (Generación Aumentada por Recuperación) para búsqueda de documentos e inyección de contexto"
+  enable_chat_bubble:
+    name: Burbuja de Chat
+    description: "Mostrar una burbuja de chat AI flotante en cada página de Home Assistant. Detecta el contexto (automatizaciones, scripts, paneles). Incluye entrada de voz, renderizado markdown y cambio de agente en vivo. Oculta en dispositivos móviles."
+  enable_mcp:
+    name: Habilitar MCP
+    description: "Habilitar el soporte MCP (Model Context Protocol). Si está desactivado, Amira no intentará conectarse a los servidores MCP al inicio, eliminando errores innecesarios de los registros."
+
+  timeout:
+    name: Tiempo de Espera
+    description: Tiempo de espera de solicitudes API en segundos (predeterminado 30, aumentar si las respuestas son lentas)
+  max_retries:
+    name: Reintentos Máximos
+    description: Número máximo de intentos para llamadas API fallidas (predeterminado 3)
+  max_snapshots_per_file:
+    name: Copias Máximas por Archivo
+    description: "Número máximo de copias de seguridad por archivo (ej. 5 para automations.yaml, 5 para scripts.yaml). Las copias más antiguas se eliminan automáticamente."
+  max_conversations:
+    name: Conversaciones Máximas
+    description: "Número máximo de conversaciones de chat en el historial (1-100)"
+
+  cost_currency:
+    name: Moneda de Costes
+    description: "Moneda para mostrar los costes de tokens (USD, EUR, GBP o JPY)"
+  mcp_config_file:
+    name: Archivo de Configuración MCP
+    description: "Ruta del archivo JSON de configuración MCP (predeterminado: /config/amira/mcp_config.json) - crea este archivo con los servidores MCP personalizados"
+
+  telegram_bot_token:
+    name: Token de Bot Telegram
+    description: "Token de bot Telegram de @BotFather - dejar vacío para deshabilitar mensajería de Telegram"
+  twilio_account_sid:
+    name: SID de Cuenta Twilio
+    description: "Tu SID de Cuenta Twilio para integración WhatsApp - obtén de console.twilio.com"
+  twilio_auth_token:
+    name: Token de Autenticación Twilio
+    description: "Tu Token de Autenticación Twilio para integración WhatsApp - obtén de console.twilio.com"
+  twilio_whatsapp_from:
+    name: Número WhatsApp Twilio
+    description: "Tu número WhatsApp Twilio (ej. +1234567890) - dejar vacío para deshabilitar WhatsApp"
+
+  colored_logs:
+    name: Registros Coloreados
+    description: Habilitar indicadores emoji en los registros del addon (🟢 éxito, 🔴 error, etc.)
+  debug_mode:
+    name: Modo Debug
+    description: Habilita registro detallado para solución de problemas (crea registros más grandes)
+  log_level:
+    name: Nivel de Registro
+    description: "Verbosidad de registro: normal (filtrar ruido), verbose (todos los registros), debug (incluye datos payload)"
+
+  api_port:
+    name: Puerto API
+    description: "Puerto en el que el addon expone su API interna (predeterminado: 5010) - cambiar solo si hay conflicto con otro addon"

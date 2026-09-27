@@ -1,0 +1,10 @@
+# Core dependencies — MUST install for the server to start.
+# These are pure-Python or have pre-built wheels for all platforms.
+flask==3.0.0
+flask-cors==4.0.0
+waitress==3.0.2
+requests==2.31.0
+python-dotenv==1.0.0
+pyyaml>=6.0
+websocket-client>=1.6.0
+httpx>=0.24.0

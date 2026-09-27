@@ -1,0 +1,311 @@
+{
+  "keywords": {
+    "it": {
+      "modify": [
+        "modifica",
+        "cambia",
+        "aggiorna",
+        "escludi",
+        "aggiungi",
+        "rimuovi",
+        "togli",
+        "modific",
+        "cambiar",
+        "aggiornar",
+        "escluder",
+        "aggiung",
+        "rimuov",
+        "exclude",
+        "change",
+        "modify",
+        "update",
+        "remove",
+        "add",
+        "fix"
+      ],
+      "delete": [
+        "elimina",
+        "cancella",
+        "rimuovi",
+        "delete",
+        "remove"
+      ],
+      "dashboard": [
+        "dashboard",
+        "dash",
+        "lovelace",
+        "scheda",
+        "card",
+        "pannello"
+      ],
+      "chat": [
+        "ciao",
+        "buongiorno",
+        "buonasera",
+        "buonanotte",
+        "salve",
+        "hey",
+        "come stai",
+        "come va",
+        "grazie",
+        "bravo",
+        "ok",
+        "perfetto",
+        "arrivederci",
+        "a dopo"
+      ],
+      "statistics_manage": [
+        "pulisci statistiche",
+        "elimina statistiche",
+        "correggi statistiche",
+        "statistiche orfane",
+        "statistiche non esistono",
+        "fix statistiche",
+        "statistiche obsolete",
+        "pulizia statistiche",
+        "clear statistics",
+        "fix statistics"
+      ],
+      "confirm": [
+        "si",
+        "sì",
+        "ok",
+        "confermo",
+        "conferma",
+        "procedi",
+        "vai",
+        "fallo",
+        "applica",
+        "salva",
+        "d'accordo",
+        "esatto",
+        "corretto"
+      ]
+    },
+    "en": {
+      "modify": [
+        "modify",
+        "change",
+        "update",
+        "edit",
+        "alter",
+        "adjust",
+        "remove",
+        "add",
+        "fix",
+        "improve"
+      ],
+      "delete": [
+        "delete",
+        "remove",
+        "erase",
+        "eliminate",
+        "destroy"
+      ],
+      "dashboard": [
+        "dashboard",
+        "dash",
+        "lovelace",
+        "card",
+        "panel",
+        "view"
+      ],
+      "chat": [
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good evening",
+        "good night",
+        "how are you",
+        "thanks",
+        "thank you",
+        "goodbye",
+        "bye",
+        "great",
+        "ok",
+        "perfect"
+      ],
+      "statistics_manage": [
+        "clean statistics",
+        "clear statistics",
+        "fix statistics",
+        "orphaned statistics",
+        "remove statistics",
+        "statistics cleanup",
+        "purge statistics",
+        "fix unit",
+        "statistics no longer exist"
+      ],
+      "confirm": [
+        "yes",
+        "ok",
+        "okay",
+        "confirm",
+        "proceed",
+        "go ahead",
+        "do it",
+        "apply",
+        "save",
+        "agreed",
+        "correct",
+        "right"
+      ]
+    },
+    "es": {
+      "modify": [
+        "modifica",
+        "modificar",
+        "cambia",
+        "cambiar",
+        "actualiza",
+        "actualizar",
+        "edita",
+        "editar",
+        "altera",
+        "alterar",
+        "ajusta",
+        "ajustar",
+        "elimina",
+        "eliminar",
+        "añade",
+        "añadir",
+        "arregla",
+        "arreglar"
+      ],
+      "delete": [
+        "elimina",
+        "eliminar",
+        "borra",
+        "borrar",
+        "cancela",
+        "cancelar",
+        "elimina",
+        "quita",
+        "quitar"
+      ],
+      "dashboard": [
+        "dashboard",
+        "dash",
+        "tablero",
+        "tarjeta",
+        "panel",
+        "vista"
+      ],
+      "chat": [
+        "hola",
+        "buenos días",
+        "buenas tardes",
+        "buenas noches",
+        "cómo estás",
+        "gracias",
+        "adiós",
+        "hasta luego",
+        "perfecto",
+        "genial",
+        "ok"
+      ],
+      "statistics_manage": [
+        "limpiar estadísticas",
+        "eliminar estadísticas",
+        "corregir estadísticas",
+        "estadísticas huérfanas",
+        "fix estadísticas",
+        "clear statistics",
+        "purgar estadísticas"
+      ],
+      "confirm": [
+        "sí",
+        "si",
+        "ok",
+        "vale",
+        "confirmo",
+        "confirma",
+        "procede",
+        "adelante",
+        "hazlo",
+        "aplica",
+        "guarda",
+        "de acuerdo",
+        "correcto"
+      ]
+    },
+    "fr": {
+      "modify": [
+        "modifie",
+        "modifier",
+        "change",
+        "changer",
+        "mets à jour",
+        "mettre à jour",
+        "édite",
+        "éditer",
+        "altère",
+        "altérer",
+        "ajuste",
+        "ajuster",
+        "supprime",
+        "supprimer",
+        "ajoute",
+        "ajouter",
+        "répare",
+        "réparer"
+      ],
+      "delete": [
+        "supprime",
+        "supprimer",
+        "efface",
+        "effacer",
+        "annule",
+        "annuler",
+        "enlève",
+        "enlever"
+      ],
+      "dashboard": [
+        "tableau de bord",
+        "dashboard",
+        "dash",
+        "carte",
+        "panneau",
+        "vue"
+      ],
+      "chat": [
+        "bonjour",
+        "bonsoir",
+        "bonne nuit",
+        "salut",
+        "comment vas-tu",
+        "merci",
+        "au revoir",
+        "à bientôt",
+        "parfait",
+        "super",
+        "ok"
+      ],
+      "statistics_manage": [
+        "nettoyer statistiques",
+        "supprimer statistiques",
+        "corriger statistiques",
+        "statistiques orphelines",
+        "fix statistiques",
+        "clear statistics",
+        "purger statistiques"
+      ],
+      "confirm": [
+        "oui",
+        "ok",
+        "d'accord",
+        "confirme",
+        "confirmer",
+        "procède",
+        "vas-y",
+        "fais-le",
+        "applique",
+        "sauvegarde",
+        "entendu",
+        "correct",
+        "exactement"
+      ]
+    }
+  }
+}
