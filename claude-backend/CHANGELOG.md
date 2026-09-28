@@ -2,6 +2,35 @@
 
 > **⚠️ After updating, rebuild the add-on** (Settings → Add-ons → Amira → Rebuild) to apply new dependencies.
 
+## 4.8.1-native9 — Persistent turns, prompt queue, working Stop
+
+### Fixed
+- **A turn no longer belongs to its HTTP request.** Each session gets a background worker
+  (`services/turn_queue.py`) with an append-only event log, so closing the tab, switching
+  chat or losing the connection costs you the stream, never the answer. New
+  `GET /api/chat/tail?session_id=&from=` replays and follows a run;
+  `GET /api/chat/status` reports `{running, pending, events, turn, current_from}`.
+  `current_from` points at the in-flight turn so a re-attaching client does not
+  re-render turns already in saved history. The chat UI re-attaches on load and on
+  every chat switch, and switching chats detaches instead of aborting.
+- **Prompts sent during a turn are queued instead of dropped.** A second prompt for a busy
+  session returns `202 {"status":"queued","pending":n}` and the open tail delivers it in
+  order, the way the Claude Code CLI queues input. Enter now always sends or queues;
+  stopping is the Stop button's job alone. Applies to the chat UI and the chat bubble.
+- **Stop actually stops.** `abort_streams` was written by the route and read by nothing, so
+  Stop never interrupted anything. `services/turn_context.py` keeps a thread-local session
+  id plus a registry of live CLI subprocesses; `providers/claude_code.py` registers the
+  process it spawns, and abort kills the process group and drops the queue. A flag alone
+  was never enough — the worker parks inside the provider waiting on a CLI read.
+- **Conversations stopped disappearing.** `MAX_CONVERSATIONS` defaulted to 10 with a hard
+  clamp of 100; `save_conversations()` keeps only the newest N and `/api/conversations`
+  truncates to the same number, so older chats vanished from both the file and the sidebar.
+  Default is now 500, clamp 5000, and `MAX_CONVERSATIONS` is set in `config.yaml`.
+  Note that `settings.json` (`max_conversations`, editable in Settings) overrides the
+  environment variable.
+- **The first conversation is no longer orphaned.** A first-ever visit generated a session
+  id but never wrote it to `localStorage`, so the next load started somewhere else.
+
 ## 4.8.1 — New provider: Claude subscription via Claude Code
 
 ### New

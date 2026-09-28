@@ -4,7 +4,13 @@
 # Root Claude Code terminal (ttyd + tmux) on port 7681, no permission prompts.
 export CLAUDE_CONFIG_DIR=/data/claude
 export HOME=/data/claude-home
-export PATH="/data/claude-home/.local/bin:${PATH}"
+export NPM_CONFIG_PREFIX=/data/npm-global
+export UV_TOOL_DIR=/data/uv/tools
+export UV_TOOL_BIN_DIR=/data/uv/bin
+export UV_CACHE_DIR=/data/uv/cache
+export UV_PYTHON_INSTALL_DIR=/data/uv/python
+export AMIRA_WORKSPACE=/share/amira-workspace
+export PATH="/data/npm-global/bin:/data/uv/bin:/data/claude-home/.local/bin:${PATH}"
 export IS_SANDBOX=1
 export TERM=xterm-256color
 _cc_token=$(bashio::config 'claude_code_oauth_token' '')

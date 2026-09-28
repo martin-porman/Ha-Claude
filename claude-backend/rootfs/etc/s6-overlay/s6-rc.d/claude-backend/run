@@ -57,6 +57,17 @@ bashio::log.info "Runtime settings managed via /config/amira/settings.json"
 # Credentials from `claude auth login` live in CLAUDE_CONFIG_DIR; the
 # long-lived `claude setup-token` token comes from the add-on option.
 export CLAUDE_CONFIG_DIR=/data/claude
+
+# ── Persistent tooling so Amira can self-improve (plugins/skills/MCP survive
+# restarts and add-on updates): everything installed lands in /data or /share.
+export NPM_CONFIG_PREFIX=/data/npm-global
+export UV_TOOL_DIR=/data/uv/tools
+export UV_TOOL_BIN_DIR=/data/uv/bin
+export UV_CACHE_DIR=/data/uv/cache
+export UV_PYTHON_INSTALL_DIR=/data/uv/python
+export AMIRA_WORKSPACE=/share/amira-workspace
+export PATH="/data/npm-global/bin:/data/uv/bin:/data/claude-home/.local/bin:${PATH}"
+mkdir -p /data/npm-global /data/uv/tools /data/uv/bin /data/uv/cache /data/uv/python "${AMIRA_WORKSPACE}"
 CLAUDE_CODE_HOME=/data/claude-home
 CLAUDE_CODE_NATIVE_BIN="${CLAUDE_CODE_HOME}/.local/bin/claude"
 mkdir -p "${CLAUDE_CONFIG_DIR}" "${CLAUDE_CODE_HOME}" /data/claude-work

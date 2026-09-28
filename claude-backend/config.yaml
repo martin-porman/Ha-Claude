@@ -1,11 +1,11 @@
 # Home Assistant Add-on configuration
 name: Amira
-version: "4.8.1-native3"
+version: "4.8.1-native9"
 slug: claude-backend
 description: >-
   Amira - AI-powered smart home assistant with Claude, ChatGPT, Gemini,
   NVIDIA NIM and GitHub Models (40+ AI models) + Telegram & WhatsApp
-url: https://github.com/martin-porman/Ha-Claude
+url: https://github.com/Bobsilvio/ha-claude
 init: false
 arch:
   - aarch64
@@ -63,6 +63,10 @@ environment:
   CLAUDE_CODE_WORK_DIR: "/config"
   CLAUDE_CODE_TIMEOUT: "900"
   IS_SANDBOX: "1"
+  UV_INDEX_STRATEGY: "unsafe-best-match"
+  KINDLY_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium"
+  CHROME_BIN: "/usr/bin/chromium"
+  MAX_CONVERSATIONS: "500"
 options:
   anthropic_api_key: ""
   openai_api_key: ""

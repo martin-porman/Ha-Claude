@@ -261,7 +261,7 @@ AGENT_NAME = "Amira"
 AGENT_AVATAR = "🤖"
 AGENT_INSTRUCTIONS = ""
 HTML_DASHBOARD_FOOTER = ""
-MAX_CONVERSATIONS = max(1, min(100, int(os.getenv("MAX_CONVERSATIONS", "10") or "10")))
+MAX_CONVERSATIONS = max(1, min(5000, int(os.getenv("MAX_CONVERSATIONS", "500") or "500")))
 MAX_SNAPSHOTS_PER_FILE = max(1, min(50, int(os.getenv("MAX_SNAPSHOTS_PER_FILE", "5") or "5")))
 
 # New globals for settings previously read only inline

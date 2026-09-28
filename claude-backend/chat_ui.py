@@ -4276,8 +4276,10 @@ def get_chat_ui():
         // If the stored session belongs to the bubble, start a fresh chat-UI conversation
         if (currentSessionId.startsWith('bubble_')) {{
             currentSessionId = Date.now().toString();
-            safeLocalStorageSet('currentSessionId', currentSessionId);
         }}
+        // Always persist it: a first-ever visit generates an id here, and without
+        // writing it back the very first conversation is orphaned on reload.
+        safeLocalStorageSet('currentSessionId', currentSessionId);
         let currentImage = null;  // Stores base64 image data
         let pendingDocument = null;  // Stores {{file, name, size}} for upload on send
         let readOnlyMode = safeLocalStorageGet('readOnlyMode') === 'true';
@@ -7395,7 +7397,11 @@ def get_chat_ui():
         function handleKeyDown(e) {{
             if (e.key === 'Enter' && !e.shiftKey) {{
                 e.preventDefault();
-                handleButtonClick();
+                const hasText = !!(input && input.value && input.value.trim());
+                // Enter always sends or queues. Stopping stays the button's job,
+                // so typing ahead during a long answer never kills it.
+                if (sending && hasText) sendMessage();
+                else handleButtonClick();
             }}
         }}
 
@@ -7985,10 +7991,48 @@ def get_chat_ui():
             sendMessage();
         }}
 
+        // Send a prompt while a turn is already running: the server queues it for
+        // this session and the open tail delivers it, the way the CLI queues input.
+        async function queuePrompt(text) {{
+            const fileCtx = buildFileContext();
+            const payload = {{
+                message: fileCtx ? fileCtx + '\\n\\n' + text : text,
+                session_id: currentSessionId,
+                read_only: readOnlyMode,
+                voice_mode: !!voiceModeActive
+            }};
+            addMessage(text, 'user');
+            if (input) {{ input.value = ''; input.style.height = 'auto'; }}
+            const queuedSid = currentSessionId;
+            try {{
+                const r = await fetch(apiUrl('api/chat/stream'), {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(payload)
+                }});
+                if (r.status === 202) {{
+                    addMessage(T.prompt_queued || '⏳ Queued — runs after the current answer', 'system');
+                }} else if (r.ok && (r.headers.get('content-type') || '').toLowerCase().includes('text/event-stream')) {{
+                    // The turn finished between our check and the POST: stream it.
+                    sending = true;
+                    setStopMode(true);
+                    showThinking();
+                    try {{ await handleStream(r, queuedSid); }}
+                    finally {{ sending = false; setStopMode(false); removeThinking(); loadChatList(); }}
+                }}
+            }} catch (e) {{
+                addMessage('❌ ' + T.error_prefix + (e.message || String(e)), 'system');
+            }}
+        }}
+
         async function sendMessage() {{
             const text = (input && input.value ? input.value : '').trim();
             const hasDoc = !!pendingDocument;
-            if ((!text && !hasDoc) || sending) return;
+            if (!text && !hasDoc) return;
+            if (sending) {{
+                if (text) await queuePrompt(text);
+                return;
+            }}
 
             sending = true;
             setStopMode(true);
@@ -8097,7 +8141,7 @@ def get_chat_ui():
 
                 const contentType = (resp.headers.get('content-type') || '').toLowerCase();
                 if (contentType.includes('text/event-stream')) {{
-                    await handleStream(resp);
+                    await handleStream(resp, currentSessionId);
                 }} else {{
                     const data = await resp.json().catch(() => ({{}}));
                     if (data && data.response) {{
@@ -8123,7 +8167,9 @@ def get_chat_ui():
             }}
         }}
 
-        async function handleStream(resp) {{
+        async function handleStream(resp, streamSid, attachMode) {{
+            streamSid = streamSid || currentSessionId;
+            attachMode = !!attachMode;
             const reader = resp.body.getReader();
             currentReader = reader;
             const decoder = new TextDecoder();
@@ -8152,6 +8198,32 @@ def get_chat_ui():
                         try {{
                             const evt = JSON.parse(line.slice(6));
                             gotAnyEvent = true;
+                            // The user moved to another chat: let go of the tail.
+                            // The turn keeps running server-side and its answer is
+                            // saved, so nothing is lost and nothing bleeds in here.
+                            if (streamSid && streamSid !== currentSessionId) {{
+                                shouldStop = true;
+                                try {{ reader.cancel(); }} catch (e) {{}}
+                                break;
+                            }}
+                            if (evt.type === 'idle') {{
+                                shouldStop = true;
+                                try {{ reader.cancel(); }} catch (e) {{}}
+                                break;
+                            }}
+                            if (evt.type === 'turn_start') {{
+                                // A queued prompt started. Begin a fresh bubble; show
+                                // the prompt if this tail was re-attached after a reload.
+                                div = null; fullText = ''; savedText = ''; savedDiv = null;
+                                hasTools = false; gotAnyToken = false; pendingSteps = null;
+                                if (attachMode && evt.message) {{ addMessage(evt.message, 'user'); }}
+                                showThinking();
+                                continue;
+                            }}
+                            if (evt.type === 'turn_done') {{
+                                removeThinking();
+                                continue;
+                            }}
                             if (evt.type === 'tool' || evt.type === 'tool_call') {{
                                 // Show tool progress in the thinking bubble (no assistant message yet)
                                 const desc = evt.description || evt.name;
@@ -8289,8 +8361,11 @@ def get_chat_ui():
                                 if (voiceModeActive && fullText) {{
                                     playTTSResponse(fullText);
                                 }}
-                                shouldStop = true;
-                                try {{ reader.cancel(); }} catch (e) {{}}
+                                // End of THIS turn only. The stream closes on 'idle',
+                                // so a queued prompt keeps rendering into a new bubble.
+                                div = null; fullText = ''; savedText = ''; savedDiv = null;
+                                hasTools = false; gotAnyToken = false; pendingSteps = null;
+                                loadChatList();
                             }}
                             chat.scrollTop = chat.scrollHeight;
                         }} catch(e) {{}}
@@ -9257,6 +9332,7 @@ def get_chat_ui():
         }}
 
         async function loadConversation(sessionId) {{
+            detachStream();
             currentSessionId = sessionId;
             // Only persist non-bubble sessions so reopening the page won't resume a bubble chat
             if (!sessionId.startsWith('bubble_')) {{
@@ -9297,6 +9373,8 @@ def get_chat_ui():
                 else loadChatList();
                 closeSidebarMobile();
             }} catch(e) {{ console.error('Error loading conversation:', e); }}
+            // If a turn is still running for this session, pick the stream back up.
+            attachIfRunning(sessionId);
         }}
 
         async function loadHistory() {{
@@ -9315,7 +9393,44 @@ def get_chat_ui():
             if (banner) banner.style.display = 'none';
         }}
 
+        // Let go of the current tail WITHOUT aborting: the turn keeps running on the
+        // server and its answer is saved to its own session.
+        function detachStream() {{
+            if (currentReader) {{
+                try {{ currentReader.cancel(); }} catch (e) {{}}
+                currentReader = null;
+            }}
+            sending = false;
+            setStopMode(false);
+            removeThinking();
+            if (sendBtn) sendBtn.disabled = false;
+        }}
+
+        // Re-attach to a turn that is still running for this session (after a reload,
+        // a chat switch, or a dropped connection).
+        async function attachIfRunning(sid) {{
+            try {{
+                const s = await (await fetch(apiUrl('api/chat/status?session_id=' + encodeURIComponent(sid)))).json();
+                if (!s || !s.running) return false;
+                const r = await fetch(apiUrl('api/chat/tail?session_id=' + encodeURIComponent(sid) + '&from=' + (s.current_from || 0)));
+                if (!r.ok) return false;
+                sending = true;
+                setStopMode(true);
+                showThinking();
+                try {{ await handleStream(r, sid, true); }}
+                finally {{
+                    sending = false;
+                    setStopMode(false);
+                    removeThinking();
+                    currentReader = null;
+                    loadChatList();
+                }}
+                return true;
+            }} catch (e) {{ return false; }}
+        }}
+
         async function newChat() {{
+            detachStream();
             currentSessionId = Date.now().toString();
             safeLocalStorageSet('currentSessionId', currentSessionId);
             resetConversationUsage();

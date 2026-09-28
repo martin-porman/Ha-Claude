@@ -380,6 +380,13 @@ class ClaudeCodeProvider(EnhancedProvider):
                     "auth with $SUPERVISOR_TOKEN (python3 has websocket-client and aiohttp)\n"
                     "- Supervisor API: http://supervisor/ with $SUPERVISOR_TOKEN\n"
                     "- HAOS host (outside this container): run `hostsh '<command>'` — root shell on the host with host mounts, network and processes (e.g. `hostsh 'ls /'`)\n"
+                    "- Persistent workspace for git clones and indexing: $AMIRA_WORKSPACE (/share/amira-workspace). "
+                    "Clone repos there, then index with the codebase-memory MCP and query the graph instead of grepping.\n"
+                    "- Web search: the kindly-web-search MCP (get_content for a known URL, web_search to discover sources).\n"
+                    "- Self-improvement: you may install and keep skills, plugins and MCP servers. Skills go in "
+                    "/data/claude/skills/<name>/SKILL.md; plugins via `claude plugin marketplace add` / `claude plugin install`; "
+                    "MCP servers via `claude mcp add` or /data/claude/.claude.json. npm (-g) and uv/uvx installs persist under /data. "
+                    "All of /data and /share survive restarts and add-on updates; the container filesystem does not.\n"
                     "Read live state before answering questions about devices; never guess."
                 )
                 if intent_base_prompt:
@@ -555,9 +562,21 @@ class ClaudeCodeProvider(EnhancedProvider):
                 yield {"type": "error", "message": f"Claude Code: could not start CLI: {e}"}
                 return
 
+            # Let Stop reach the CLI even while this generator is parked on a read.
+            try:
+                from services import turn_context
+                turn_context.register(proc)
+            except Exception:
+                pass
+
             yield from self._pump(proc, prompt)
         finally:
             if proc is not None:
+                try:
+                    from services import turn_context
+                    turn_context.unregister(proc)
+                except Exception:
+                    pass
                 self._kill(proc)
             if sp_file:
                 try:

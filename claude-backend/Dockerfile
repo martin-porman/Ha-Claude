@@ -22,7 +22,14 @@ RUN apk add --no-cache \
     sqlite \
     websocat \
     ttyd \
-    tmux
+    tmux \
+    uv \
+    nodejs \
+    npm \
+    chromium \
+    chromium-swiftshader \
+    font-noto \
+    ttf-freefont
 
 # ── Claude Code CLI (provider "claude_code": Claude Pro/Max subscription) ────
 # Native musl binary fetched straight from the npm registry (same approach as

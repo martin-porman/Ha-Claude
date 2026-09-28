@@ -5616,9 +5616,29 @@ def get_chat_bubble_js(
     msgEl.appendChild(btnContainer);
   }}
 
+  // A turn is already running: hand the prompt to the server queue instead of
+  // dropping it. The open stream delivers it when the current answer finishes.
+  async function queueBubblePrompt(text) {{
+    addMessage('user', text, false);
+    addToHistory('user', text);
+    input.value = ''; input.style.height = 'auto';
+    try {{
+      const r = await fetch(API_BASE + '/api/chat/stream', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ message: text, session_id: getSessionId(), language: UI_LANG }}),
+        credentials: 'same-origin',
+      }});
+      if (r.status === 202) {{
+        addMessage('system', T.prompt_queued || '\u23f3 Queued', false);
+      }}
+    }} catch(e) {{ /* the running stream still owns the turn */ }}
+  }}
+
   async function sendMessage() {{
     const text = input.value.trim();
-    if (!text || isStreaming) return;
+    if (!text) return;
+    if (isStreaming) {{ await queueBubblePrompt(text); return; }}
 
     const ctx = detectContext();
     let contextPrefix = buildContextPrefix();
@@ -5734,7 +5754,7 @@ def get_chat_bubble_js(
       let pendingDiffHtml = '';  // accumulated diff_html content (separate so done/full_text can't overwrite it)
       let firstToken = true;
 
-      const assistantEl = addMessage('assistant', '', false);
+      let assistantEl = addMessage('assistant', '', false);
       assistantEl.style.display = 'none';
 
       while (true) {{
@@ -5806,6 +5826,18 @@ def get_chat_bubble_js(
               const prefix = stepsHtml ? stepsHtml.outerHTML : '';
               assistantEl.innerHTML = prefix + renderMarkdown(pendingDiffHtml + assistantText);
               messagesEl.scrollTop = messagesEl.scrollHeight;
+            }} else if (evt.type === 'turn_start') {{
+              // Queued prompt starting: keep the finished answer above and open a
+              // new block for this one.
+              if (evt.seq && evt.seq > 1) {{
+                assistantText = '';
+                pendingDiffHtml = '';
+                if (toolBadgesEl) {{ toolBadgesEl.remove(); toolBadgesEl = null; }}
+                assistantEl = addMessage('assistant', '', false);
+                assistantEl.style.display = 'none';
+                firstToken = true;
+                _restoreThinking();
+              }}
             }} else if (evt.type === 'clear') {{
               assistantText = '';
               pendingDiffHtml = '';

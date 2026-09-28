@@ -3,6 +3,8 @@
 Endpoints:
 - POST /api/chat
 - POST /api/chat/stream
+- GET  /api/chat/tail
+- GET  /api/chat/status
 - POST /api/chat/abort
 - POST /api/chat/skill/deactivate
 """
@@ -12,6 +14,8 @@ import logging
 
 import pricing
 from flask import Blueprint, request, jsonify, Response, stream_with_context
+
+from services import turn_queue
 
 logger = logging.getLogger(__name__)
 
@@ -108,61 +112,65 @@ def api_chat_stream():
         return jsonify({"error": "Empty message"}), 400
     if read_only:
         logger.info(f"Read-only mode active for session {session_id}")
-    api.abort_streams[session_id] = False
 
-    def generate():
-        import threading as _threading
-        import queue as _queue
-        q: _queue.Queue = _queue.Queue()
-        _SENTINEL = object()
+    job = {
+        "message": message,
+        "image": image_data,
+        "read_only": read_only,
+        "voice_mode": voice_mode,
+        "language": req_language,
+    }
+    placed = turn_queue.submit(session_id, job)
 
-        def _producer():
-            try:
-                for event in api.stream_chat_with_ai(message, session_id, image_data, read_only=read_only, voice_mode=voice_mode, req_language=req_language):
-                    q.put(("event", event))
-            except Exception as exc:
-                logger.error(
-                    f"❌ Stream error in stream_chat_with_ai: {type(exc).__name__}: {exc}",
-                    extra={"context": "REQUEST"},
-                )
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}", extra={"context": "REQUEST"})
-                q.put(("error", exc))
-            finally:
-                q.put(("done", _SENTINEL))
-
-        t = _threading.Thread(target=_producer, daemon=True)
-        t.start()
-
-        while True:
-            try:
-                kind, val = q.get(timeout=10)
-            except _queue.Empty:
-                yield ": keep-alive\n\n"
-                continue
-
-            if kind == "event":
-                yield f"data: {json.dumps(val, ensure_ascii=False)}\n\n"
-            elif kind == "error":
-                yield f"data: {json.dumps({'type': 'error', 'message': str(val)}, ensure_ascii=False)}\n\n"
-                break
-            else:
-                break
+    # A turn was already running for this session: the prompt is queued and the
+    # client's open tail will carry it. Nothing to stream from this request.
+    if placed["queued"]:
+        logger.info(f"Prompt queued for busy session {session_id}")
+        return jsonify({
+            "status": "queued",
+            "from": placed["from"],
+            "pending": turn_queue.status(session_id)["pending"],
+        }), 202
 
     return Response(
-        stream_with_context(generate()),
+        stream_with_context(turn_queue.tail(session_id, placed["from"])),
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
     )
 
 
+@chat_bp.route('/api/chat/tail', methods=['GET'])
+def api_chat_tail():
+    """Re-attach to a session's turn that is already running.
+
+    The turn keeps running whatever happens to the connection, so a reload, a
+    chat switch or a dropped network only costs the tail, never the answer.
+    """
+    session_id = request.args.get("session_id", "default")
+    try:
+        start = int(request.args.get("from", "0"))
+    except ValueError:
+        start = 0
+    return Response(
+        stream_with_context(turn_queue.tail(session_id, start)),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
+    )
+
+
+@chat_bp.route('/api/chat/status', methods=['GET'])
+def api_chat_status():
+    """Whether a turn is running for this session, and how much is queued."""
+    session_id = request.args.get("session_id", "default")
+    return jsonify(turn_queue.status(session_id)), 200
+
+
 @chat_bp.route('/api/chat/abort', methods=['POST'])
 def api_chat_abort():
-    """Abort a running stream."""
-    import api
+    """Stop the running turn and drop anything queued behind it."""
     data = request.get_json() or {}
     session_id = data.get("session_id", "default")
-    api.abort_streams[session_id] = True
+    turn_queue.abort(session_id)
     logger.info(f"Abort requested for session {session_id}")
     return jsonify({"status": "abort_requested"}), 200
 
