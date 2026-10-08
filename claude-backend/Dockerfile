@@ -23,6 +23,8 @@ RUN apk add --no-cache \
     websocat \
     ttyd \
     tmux \
+    nginx \
+    github-cli \
     uv \
     nodejs \
     npm \
@@ -129,6 +131,8 @@ COPY rootfs /
 # Make s6 service scripts executable
 RUN chmod +x /etc/s6-overlay/s6-rc.d/claude-backend/run \
     && chmod +x /etc/s6-overlay/s6-rc.d/claude-terminal/run \
+    && chmod +x /etc/s6-overlay/s6-rc.d/ingress-proxy/run \
+    && chmod 0755 /usr/local/bin/amira-session \
     && chmod 0755 /usr/local/bin/hostsh \
     && chmod +x /etc/s6-overlay/s6-rc.d/claude-backend/finish
 

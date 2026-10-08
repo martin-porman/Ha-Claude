@@ -77,9 +77,18 @@ def validate_token(token: Optional[str]) -> bool:
     return secrets.compare_digest(token, stored)
 
 
+# Only these peers may assert X-Ingress-Path: the Supervisor ingress proxy and
+# the local nginx ingress front (which itself only accepts the Supervisor).
+# Anything else (LAN clients on the published 5010 port, other add-ons on the
+# hassio network) could otherwise spoof the header and skip token auth.
+_TRUSTED_INGRESS_PEERS = frozenset(["172.30.32.2", "127.0.0.1", "::1"])
+
+
 def is_ingress_request(request) -> bool:
     """Return True if request comes through HA ingress proxy (trusted)."""
-    return bool(request.headers.get("X-Ingress-Path"))
+    if not request.headers.get("X-Ingress-Path"):
+        return False
+    return getattr(request, "remote_addr", None) in _TRUSTED_INGRESS_PEERS
 
 
 def is_exempt_path(path: str) -> bool:

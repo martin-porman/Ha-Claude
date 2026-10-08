@@ -3147,6 +3147,7 @@ def get_chat_ui():
         </div>
         <button id="testNvidiaBtn" class="new-chat" title="{ui_js['nvidia_test_title']}" style="display:none">\U0001f50d {ui_js['nvidia_test_btn']}</button>
         <!-- Populated by JavaScript -->
+        <a id="terminalBtn" class="new-chat" href="term" target="_self" title="Claude terminal (root)" style="text-decoration:none">\u2328 Terminal</a>
         <button id="newChatBtn" class="new-chat" onclick="newChat()" title="{ui_js['new_chat_title']}">\u2728 {ui_js['new_chat_btn']}</button>
         <label class="readonly-toggle" title="{ui_js['readonly_title']}">
             <span class="readonly-icon">\U0001f441</span>

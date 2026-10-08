@@ -1,7 +1,11 @@
 #!/usr/bin/with-contenv bashio
 # vim: ft=bash
 # shellcheck shell=bash
-# Root Claude Code terminal (ttyd + tmux) on port 7681, no permission prompts.
+# Root Claude Code terminal (ttyd + tmux), no permission prompts.
+#  - Ingress (HA login): ttyd on a unix socket, reached only through the nginx
+#    ingress front at <Amira panel>/term (page) and /ttyd/ (raw terminal).
+#  - Optional LAN access: only when the 7681 port is mapped AND
+#    terminal_password is set; a second ttyd with basic auth (user "amira").
 export CLAUDE_CONFIG_DIR=/data/claude
 export HOME=/data/claude-home
 export NPM_CONFIG_PREFIX=/data/npm-global
@@ -10,6 +14,7 @@ export UV_TOOL_BIN_DIR=/data/uv/bin
 export UV_CACHE_DIR=/data/uv/cache
 export UV_PYTHON_INSTALL_DIR=/data/uv/python
 export AMIRA_WORKSPACE=/share/amira-workspace
+export GH_CONFIG_DIR=/data/gh
 export PATH="/data/npm-global/bin:/data/uv/bin:/data/claude-home/.local/bin:${PATH}"
 export IS_SANDBOX=1
 export TERM=xterm-256color
@@ -18,8 +23,45 @@ if [[ -n "${_cc_token}" && "${_cc_token}" != "null" ]]; then
     export CLAUDE_CODE_OAUTH_TOKEN="${_cc_token}"
 fi
 unset _cc_token
-mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}"
+mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}" "${GH_CONFIG_DIR}" /data/terminal-images
+chmod 700 "${GH_CONFIG_DIR}"
+
+# ── tmux: mouse off by default so browser select/copy/paste works ────────────
+_mouse=off
+bashio::config.true 'tmux_mouse' && _mouse=on
+cat > "${HOME}/.tmux.conf" <<TMUX
+set -g mouse ${_mouse}
+set -g history-limit 50000
+set -g escape-time 20
+set -g base-index 1
+set -g renumber-windows on
+set -g default-terminal "tmux-256color"
+set -g status-bg colour235
+set -g status-fg colour136
+set -g status-left '[#S] '
+set -g status-right '%H:%M'
+TMUX
+tmux source-file "${HOME}/.tmux.conf" 2>/dev/null || true
+
+# Persistent session so the first browser connection is instant and Claude
+# keeps running when the tab closes.
+tmux has-session -t claude 2>/dev/null || tmux new-session -d -s claude amira-session
+
 cd /config
-bashio::log.info "Claude terminal: ttyd on port 7681"
-exec ttyd --writable --port 7681 --ping-interval 30 \
-    tmux new-session -A -s claude "claude --dangerously-skip-permissions; exec bash -l"
+_ttyd_opts=(--writable --ping-interval 30 --client-option reconnect=5
+            --client-option disableLeaveAlert=true)
+_attach=(tmux new-session -A -s claude amira-session)
+
+_pw=$(bashio::config 'terminal_password' '')
+if [[ -n "${_pw}" && "${_pw}" != "null" ]]; then
+    bashio::log.info "Claude terminal: LAN ttyd on :7681/ttyd/ with basic auth (user amira)"
+    ttyd "${_ttyd_opts[@]}" --port 7681 --base-path /ttyd \
+        --credential "amira:${_pw}" "${_attach[@]}" &
+else
+    bashio::log.info "Claude terminal: LAN port disabled (set terminal_password to enable)"
+fi
+unset _pw
+
+rm -f /run/ttyd.sock
+bashio::log.info "Claude terminal: ingress ttyd on /run/ttyd.sock (panel → Terminal)"
+exec ttyd "${_ttyd_opts[@]}" --interface /run/ttyd.sock --base-path /ttyd "${_attach[@]}"

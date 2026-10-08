@@ -2,6 +2,22 @@
 
 > **⚠️ After updating, rebuild the add-on** (Settings → Add-ons → Amira → Rebuild) to apply new dependencies.
 
+## 4.8.1-native10 — Terminal behind HA login, image paste, gh
+
+### Security
+- **Ingress header spoofing fixed**: `X-Ingress-Path` is now trusted only from the Supervisor ingress proxy (172.30.32.2) or the local nginx front. Before, any LAN client on port 5010 could send the header and skip `X-Amira-Token` auth.
+- **Terminal no longer open on the LAN**: port 7681 is unmapped by default and ttyd listens on a unix socket behind HA ingress. LAN access is opt-in: set `terminal_password` and map 7681 (basic auth, user `amira`, path `/ttyd/`).
+- `panel_admin: true`: the Amira panel (chat with root Claude + terminal) is admin-only.
+
+### New
+- **Terminal in the Amira panel** (header → ⌨ Terminal, `/term`): nginx ingress front on 8099 routes `/ttyd/` (websocket) to ttyd and everything else to Flask on 5010.
+- **Image paste / drag-drop / picker** in the terminal page: saved to `/data/terminal-images` (14-day retention) and the path is typed into the Claude tmux session.
+- **Session picker** (`amira-session`): new / continue (`-c`) / resume (`-r`) / custom flags / `gh auth login` / bash.
+- **tmux defaults**: mouse off (option `tmux_mouse`), 50k scrollback, 20 ms escape-time. ttyd auto-reconnects (`reconnect=5`).
+- **GitHub CLI** (`gh`) with persistent auth in `/data/gh` (`GH_CONFIG_DIR`) for both the chat backend and the terminal.
+
+---
+
 ## 4.8.1-native9 — Persistent turns, prompt queue, working Stop
 
 ### Fixed

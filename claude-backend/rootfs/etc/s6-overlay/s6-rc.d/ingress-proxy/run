@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bashio
+# vim: ft=bash
+# shellcheck shell=bash
+# HA ingress front (port 8099): only the Supervisor ingress proxy may connect.
+#   /ttyd/...  → ttyd unix socket (websocket terminal)
+#   everything else → Amira Flask API on 127.0.0.1:5010 (chat UI, SSE, uploads)
+bashio::log.info "Ingress front: nginx on :8099"
+exec nginx -c /etc/nginx/amira/nginx.conf -g 'daemon off;'

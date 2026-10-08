@@ -1,0 +1,29 @@
+#!/bin/bash
+# Session picker for the Amira Claude terminal (runs inside tmux session "claude").
+export IS_SANDBOX=1
+FLAGS=(--dangerously-skip-permissions)
+while true; do
+    clear
+    echo "Amira Claude terminal   ($(claude --version 2>/dev/null || echo 'claude ?'))"
+    echo
+    echo "  1) New Claude session            (default, Enter)"
+    echo "  2) Continue last conversation    (claude -c)"
+    echo "  3) Resume from list              (claude -r)"
+    echo "  4) Claude with custom flags"
+    echo "  5) GitHub CLI login              (gh auth login)"
+    echo "  6) Bash shell                    (exit returns here)"
+    echo
+    read -r -p "Choice [1-6]: " c
+    case "${c:-1}" in
+        1) claude "${FLAGS[@]}" ;;
+        2) claude -c "${FLAGS[@]}" ;;
+        3) claude -r "${FLAGS[@]}" ;;
+        4) read -r -p "claude " args; eval "claude ${args} ${FLAGS[*]}" ;;
+        5) gh auth status 2>/dev/null; echo
+           echo "Token login is easiest in a container: https://github.com/settings/tokens"
+           gh auth login -h github.com -p https; gh auth setup-git 2>/dev/null
+           read -r -p "Enter to return..." _ ;;
+        6) bash -l ;;
+        *) echo "Invalid choice"; sleep 1 ;;
+    esac
+done

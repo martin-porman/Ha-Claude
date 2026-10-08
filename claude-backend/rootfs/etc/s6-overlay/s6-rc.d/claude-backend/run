@@ -66,6 +66,8 @@ export UV_TOOL_BIN_DIR=/data/uv/bin
 export UV_CACHE_DIR=/data/uv/cache
 export UV_PYTHON_INSTALL_DIR=/data/uv/python
 export AMIRA_WORKSPACE=/share/amira-workspace
+export GH_CONFIG_DIR=/data/gh   # gh auth survives restarts/updates
+mkdir -p "${GH_CONFIG_DIR}" && chmod 700 "${GH_CONFIG_DIR}"
 export PATH="/data/npm-global/bin:/data/uv/bin:/data/claude-home/.local/bin:${PATH}"
 mkdir -p /data/npm-global /data/uv/tools /data/uv/bin /data/uv/cache /data/uv/python "${AMIRA_WORKSPACE}"
 CLAUDE_CODE_HOME=/data/claude-home

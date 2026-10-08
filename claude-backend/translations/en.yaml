@@ -64,6 +64,12 @@ configuration:
   claude_code_auto_update:
     name: "Claude Code auto-update"
     description: "Keep a persistent, auto-updating copy of the Claude Code CLI in /data (falls back to the bundled copy if it cannot run)"
+  terminal_password:
+    name: "Terminal LAN password"
+    description: "Leave empty for ingress-only (Amira panel → Terminal, behind HA login). If set AND port 7681 is mapped under Network, the terminal is also reachable at http://<host>:7681/ttyd/ with user 'amira' and this password."
+  tmux_mouse:
+    name: "Terminal tmux mouse mode"
+    description: "Mouse scrolling/selection by tmux. Off keeps browser copy & paste working."
 
   custom_api_key:
     name: Custom Endpoint API Key
@@ -163,3 +169,6 @@ configuration:
   api_port:
     name: API Port
     description: "Port the add-on uses to expose its internal API (default: 5010) - only change if conflicting with another add-on"
+network:
+  5010/tcp: "Amira API & WhatsApp webhook (Twilio)"
+  7681/tcp: "Claude terminal on LAN (needs terminal_password)"

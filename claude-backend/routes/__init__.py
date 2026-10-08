@@ -23,6 +23,7 @@ from routes.dashboard_routes import dashboard_bp
 from routes.file_routes import file_bp
 from routes.scheduled_routes import scheduled_bp
 from routes.skills_routes import skills_bp
+from routes.terminal_routes import terminal_bp
 
 
 # Mapping of blueprint areas to route definitions
@@ -258,3 +259,4 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(file_bp)
     app.register_blueprint(scheduled_bp)
     app.register_blueprint(skills_bp)
+    app.register_blueprint(terminal_bp)

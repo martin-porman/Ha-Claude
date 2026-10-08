@@ -77,7 +77,18 @@ class TestAuthService(unittest.TestCase):
         import services.auth_service as auth_mod
         req = MagicMock()
         req.headers = {"X-Ingress-Path": "/api/hassio_ingress/abc123"}
-        self.assertTrue(auth_mod.is_ingress_request(req))
+        for peer in ("172.30.32.2", "127.0.0.1"):
+            req.remote_addr = peer
+            self.assertTrue(auth_mod.is_ingress_request(req))
+
+    def test_is_ingress_request_spoofed_header_rejected(self):
+        """LAN clients / other add-ons must not bypass auth with a fake header."""
+        import services.auth_service as auth_mod
+        req = MagicMock()
+        req.headers = {"X-Ingress-Path": "/api/hassio_ingress/abc123"}
+        for peer in ("192.168.10.50", "172.30.32.1", "172.30.33.5", None):
+            req.remote_addr = peer
+            self.assertFalse(auth_mod.is_ingress_request(req))
 
     def test_is_ingress_request_false(self):
         import services.auth_service as auth_mod
