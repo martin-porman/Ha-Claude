@@ -4,6 +4,11 @@
 
 ## 4.8.1-native13 — Agents per chat, per-agent memory, scheduler through Claude Code
 
+### Documents and PDFs
+- **Uploads no longer crash the backend.** `rag._chunk_text` never left its loop once a chunk reached the end of the text (`start = end - overlap` repeated forever), so every upload with RAG on grew memory until the kernel OOM-killed the backend (9 GB, "Server non raggiungibile" + "Upload failed").
+- **Uploads keep the original file** in `/share/amira-uploads/<id>-<name>`; the chat prompt lists it as "Original file", so Claude Code can open, render or edit it.
+- **PyMuPDF** (`pymupdf`) is installed for PDF editing and rendering.
+
 ### Agents
 - **Each chat keeps its agent.** The chat sends the selected agent; the backend remembers it per chat (`/config/amira/session_agents.json`) and the UI restores it when you open the chat. A turn uses that agent's name, instructions and (same provider) model without changing the global agent. The browser no longer pushes a stale stored agent back to the server every 10 s.
 - **Per-agent memory.** In native mode each agent gets its own Claude Code auto-memory folder, `/data/claude/agent-memory/<agent_id>/` (`--settings autoMemoryDirectory`), seeded once from the shared memory.

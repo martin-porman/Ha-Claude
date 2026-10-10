@@ -4206,9 +4206,9 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                 if doc_context:
                     context_sections.append(
                         "## UPLOADED USER DOCUMENTS\n"
-                        "IMPORTANT: The full content of these files is included below. "
-                        "DO NOT use tools like read_config_file to read these files, "
-                        "the content is already available.\n\n"
+                        "IMPORTANT: The extracted text of these files is included below; "
+                        "do not re-read it with read_config_file. To edit, render or convert "
+                        "a file (e.g. PDF drawings), open its 'Original file' path.\n\n"
                         f"{doc_context}"
                     )
                     # Auto-cleanup: delete documents after injecting into message

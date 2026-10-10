@@ -22,6 +22,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 STORAGE_DIR = "/config/amira/documents"
+# Original uploads are kept here so Claude Code tools can open them (PDF editing, rendering).
+ORIGINALS_DIR = "/share/amira-uploads"
 
 
 def ensure_upload_dir() -> None:
@@ -67,6 +69,16 @@ def process_uploaded_file(
     content_file = os.path.join(STORAGE_DIR, f"{doc_id}.txt")
     with open(content_file, 'w', encoding='utf-8') as f:
         f.write(text)
+
+    original_path = ""
+    try:
+        Path(ORIGINALS_DIR).mkdir(parents=True, exist_ok=True)
+        original_path = os.path.join(ORIGINALS_DIR, f"{doc_id[:8]}-{os.path.basename(filename)}")
+        with open(original_path, 'wb') as f:
+            f.write(file_content)
+    except OSError as e:
+        logger.warning(f"Could not keep original upload {filename}: {e}")
+        original_path = ""
     
     # Save metadata
     index = _load_index()
@@ -77,6 +89,7 @@ def process_uploaded_file(
         "uploaded_at": datetime.utcnow().isoformat(),
         "size_bytes": len(file_content),
         "content_length": len(text),
+        "original_path": original_path,
         "note": note,
         "tags": tags or []
     }
@@ -246,6 +259,8 @@ def get_document_context(limit: int = 3, max_content_chars: int = 4000) -> str:
         )
         if doc.get("note"):
             context_lines.append(f"Note: {doc['note']}")
+        if doc.get("original_path"):
+            context_lines.append(f"Original file: {doc['original_path']}")
         
         # Include actual document content
         full_doc = get_document(doc['id'])
