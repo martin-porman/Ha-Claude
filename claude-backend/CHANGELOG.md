@@ -9,6 +9,9 @@
 - **Uploads keep the original file** in `/share/amira-uploads/<id>-<name>`; the chat prompt lists it as "Original file", so Claude Code can open, render or edit it.
 - **PyMuPDF** (`pymupdf`) is installed for PDF editing and rendering.
 
+### Chat bubble
+- **The bubble no longer disappears in browsers without an ingress cookie.** It assumed every desktop browser already had an `ingress_session` cookie (true only after an add-on panel was opened there, and it expires), so the first health check got 401 and removed the bubble. It now creates the session through the Supervisor WebSocket API, as the HA frontend does, and renews it once on 401.
+
 ### Agents
 - **Each chat keeps its agent.** The chat sends the selected agent; the backend remembers it per chat (`/config/amira/session_agents.json`) and the UI restores it when you open the chat. A turn uses that agent's name, instructions and (same provider) model without changing the global agent. The browser no longer pushes a stale stored agent back to the server every 10 s.
 - **Per-agent memory.** In native mode each agent gets its own Claude Code auto-memory folder, `/data/claude/agent-memory/<agent_id>/` (`--settings autoMemoryDirectory`), seeded once from the shared memory.

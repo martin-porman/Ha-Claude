@@ -812,9 +812,10 @@ def get_chat_bubble_js(
     return s;
   }}
 
-  // ---- Ingress session (needed for companion app / tablet WebView) ----
-  // The companion app does not automatically get a hassio_session cookie.
-  // We create one by calling /api/hassio/ingress/session with the HA Bearer token.
+  // ---- Ingress session ----
+  // Every /api/hassio_ingress/... request needs an ingress_session cookie. A
+  // browser only has one after an add-on panel was opened there, and it
+  // expires, so create it the way the HA frontend does (Supervisor via WS).
   let _ingressSessionOk = false;
   function _getHassToken() {{
     try {{
@@ -822,31 +823,21 @@ def get_chat_bubble_js(
       return (ha && ha.hass && ha.hass.auth && ha.hass.auth.data && ha.hass.auth.data.access_token) || '';
     }} catch(e) {{ return ''; }}
   }}
-  // Detect HA companion app — it has "HomeAssistant/" in the UA and lacks normal browser cookies.
-  function _isCompanionApp() {{
-    return /HomeAssistant\\//i.test(navigator.userAgent);
-  }}
-  async function _ensureIngressSession() {{
-    if (_ingressSessionOk) return true;
-    // Only needed for the HA companion app / embedded WebView — regular browsers
-    // already have the hassio_session cookie set automatically. Calling this
-    // endpoint from a regular browser always returns 401 and pollutes the console.
-    if (!_isCompanionApp()) {{ _ingressSessionOk = true; return true; }}
-    const token = _getHassToken();
-    if (!token) return false;
+  async function _ensureIngressSession(force) {{
+    if (_ingressSessionOk && !force) return true;
     try {{
-      const resp = await fetch('/api/hassio/ingress/session', {{
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {{ 'Authorization': 'Bearer ' + token }},
-      }});
-      if (resp.ok) {{
-        _ingressSessionOk = true;
-        console.log('[Amira] Ingress session created (companion app / tablet)');
-        return true;
-      }}
-    }} catch(e) {{}}
-    return false;
+      const ha = document.querySelector('home-assistant');
+      if (!ha || !ha.hass) return false;
+      const res = await ha.hass.callWS({{type: 'supervisor/api', endpoint: '/ingress/session', method: 'post'}});
+      if (!res || !res.session) return false;
+      document.cookie = 'ingress_session=' + res.session + ';path=/api/hassio_ingress/;SameSite=Strict'
+        + (location.protocol === 'https:' ? ';Secure' : '');
+      _ingressSessionOk = true;
+      return true;
+    }} catch(e) {{
+      console.warn('[Amira] Could not create ingress session:', e);
+      return false;
+    }}
   }}
 
   // ---- Device detection ----
@@ -6053,11 +6044,12 @@ def get_chat_bubble_js(
   const MAX_FAILS = 1;
   async function checkAddonHealth() {{
     try {{
-      const resp = await fetch(API_BASE + '/api/status', {{
-        method: 'GET',
-        credentials: 'same-origin',
-        timeout: 3000
-      }});
+      await _ensureIngressSession();
+      const probe = () => fetch(API_BASE + '/api/status', {{method: 'GET', credentials: 'same-origin'}});
+      let resp = await probe();
+      if (resp.status === 401 && await _ensureIngressSession(true)) {{
+        resp = await probe();  // session expired: renew once before giving up
+      }}
       if (resp.ok) {{
         addonHealthCheckFails = 0;  // Reset counter on success
         console.log('[Bubble] Addon health: OK');
@@ -6178,7 +6170,7 @@ def get_chat_bubble_js(
       _syncModel    = agentData.current_model_technical || '';
     }} catch(e) {{
       console.warn('[Amira] Could not load agents:', e);
-      // Retry once after 2s (companion app may need time to establish ingress session)
+      // Retry once after 2s with a fresh ingress session
       if (!_ingressSessionOk) {{
         setTimeout(async () => {{
           await _ensureIngressSession();
@@ -6385,7 +6377,7 @@ def get_chat_bubble_js(
     }}
   }}
 
-  // Initial setup — ensure ingress session first (needed for companion app / tablet)
+  // Initial setup — ensure ingress session first
   (async () => {{
     await _ensureIngressSession();
     registerDevice();
