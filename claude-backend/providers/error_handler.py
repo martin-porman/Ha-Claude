@@ -212,6 +212,10 @@ class ErrorTranslator:
         Returns:
             User-friendly translated error message
         """
+        # claude_code already maps CLI errors to actionable text (setup-token help,
+        # usage limit, timeout); a canned "An error occurred" would hide it.
+        if provider == "claude_code" and error_msg:
+            return error_msg
         if language not in cls.LANGUAGES:
             language = cls.DEFAULT_LANGUAGE
 

@@ -60,68 +60,45 @@ class CronExpression:
     
     @staticmethod
     def _parse_field(field: str, min_val: int, max_val: int, name: str = "", aliases: Optional[Dict] = None) -> set:
-        """Parse a single cron field."""
-        if field == "*":
-            return set(range(min_val, max_val + 1))
-        
+        """Parse a single cron field: *, n, a-b, lists and /step, with name aliases.
+
+        Weekdays are read in cron numbering (0 or 7 = Sunday, 1 = Monday) and
+        returned in Python's weekday() numbering (0 = Monday, 6 = Sunday).
+        WEEKDAY_MAP aliases are already in Python numbering.
+        """
+        is_dow = name == "weekday"
+        lo, hi = (0, 7) if is_dow else (min_val, max_val)
+
+        def num(tok: str) -> int:
+            t = tok.strip().lower()
+            if aliases and t in aliases:
+                v = aliases[t]
+                return (v + 1) % 7 if is_dow else v   # Python weekday → cron number
+            return int(t)
+
         values = set()
         for part in field.split(","):
             part = part.strip()
-            
-            # Handle aliases (jan, mon, etc.)
-            if aliases and part.lower() in aliases:
-                values.add(aliases[part.lower()])
-            # Handle ranges (1-5)
+            step = 1
+            if "/" in part:
+                part, step_txt = part.split("/", 1)
+                step = int(step_txt)
+                if step < 1:
+                    raise ValueError(f"Invalid step in cron field '{field}'")
+            if part == "*":
+                start, end = lo, hi
             elif "-" in part:
-                start, end = part.split("-")
-                if aliases and start.lower() in aliases:
-                    start = aliases[start.lower()]
-                if aliases and end.lower() in aliases:
-                    end = aliases[end.lower()]
-                start_val = int(start)
-                end_val = int(end)
-                
-                # Special case for weekday: convert cron (0-7) to Python (0-6)
-                if name == "weekday":
-                    if start_val == 0:
-                        start_val = 6  # Sunday
-                    elif start_val == 7:
-                        start_val = 6  # Sunday (alternate notation)
-                    else:
-                        start_val = start_val - 1  # Mon=1->0, Tue=2->1, etc.
-                    
-                    if end_val == 0:
-                        end_val = 6
-                    elif end_val == 7:
-                        end_val = 6
-                    else:
-                        end_val = end_val - 1
-                
-                values.update(range(start_val, end_val + 1))
-            # Handle step values (*/5, 0-30/5)
-            elif "/" in part:
-                range_part, step = part.split("/")
-                step = int(step)
-                if range_part == "*":
-                    values.update(range(min_val, max_val + 1, step))
-                else:
-                    start, end = range_part.split("-")
-                    start_val = int(start)
-                    end_val = int(end)
-                    values.update(range(start_val, end_val + 1, step))
-            # Single value
+                a, b = part.split("-", 1)
+                start, end = num(a), num(b)
             else:
-                val = int(part)
-                # Special case for weekday: convert cron (0-7) to Python (0-6)
-                if name == "weekday":
-                    if val == 0 or val == 7:
-                        val = 6  # Sunday
-                    else:
-                        val = val - 1  # 1->0, 2->1, etc.
-                values.add(val)
-        
+                start = num(part)
+                end = hi if step > 1 else start    # "5/15" means 5-max every 15
+            if start < lo or end > hi or start > end:
+                raise ValueError(f"Cron field '{field}' out of range {lo}-{hi}")
+            for v in range(start, end + 1, step):
+                values.add((v - 1) % 7 if is_dow else v)
         return values
-    
+
     def matches(self, dt: datetime) -> bool:
         """Check if datetime matches this cron expression."""
         return (

@@ -1011,6 +1011,9 @@ def build_smart_context(user_message: str, intent: str = None, max_chars: int = 
             # ── Priority 2: fuzzy matching of automation name in message ──────────
             # Skip fuzzy targeting when user explicitly asks to create NEW automations:
             # this prevents accidental updates to unrelated existing automations.
+            best_score = 0
+            best_match = None
+            msg_words = []
             if not target_auto_id and not prefer_creation_context:
                 best_score = 0
                 best_match = None
@@ -1027,7 +1030,7 @@ def build_smart_context(user_message: str, intent: str = None, max_chars: int = 
                 # Extract meaningful words from user message (>3 chars, not stop words)
                 msg_words = [w for w in msg_lower.split() if len(w) > 3 and w not in STOP_WORDS]
 
-            for a in auto_list:
+            for a in ([] if prefer_creation_context else auto_list):
                 if target_auto_id:
                     break  # already found via context prefix — skip fuzzy loop
                 fname = str(a.get("friendly_name", "")).lower()

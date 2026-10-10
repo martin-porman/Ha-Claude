@@ -13,10 +13,13 @@ To get a long-lived token, run `claude setup-token` on any computer with
 Claude Code installed and sign in with your Claude Pro/Max account; it prints
 a token starting with sk-ant-oat01-.
 
-Each request is stateless: the conversation (including tool-simulator results)
-is flattened into one prompt fed on stdin. With CLAUDE_CODE_NATIVE_TOOLS=true the
-CLI keeps its built-in tools, settings, MCP and skills and runs without permission
-prompts; otherwise built-in tools are disabled (--tools "") and Home Assistant
+With CLAUDE_CODE_NATIVE_TOOLS=true the CLI keeps its built-in tools, settings,
+MCP, skills and auto memory and runs without permission prompts. Each Amira chat
+session maps to one persistent Claude Code session (--session-id on the first
+turn, --resume afterwards), so tool results and subagent work survive between
+turns; Amira's text appends to Claude Code's default system prompt instead of
+replacing it. Otherwise each request is stateless: the conversation is flattened
+into one prompt, built-in tools are disabled (--tools "") and Home Assistant
 tools go through the tool simulator, like the other no-native-tool providers.
 """
 
@@ -31,6 +34,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from .enhanced import EnhancedProvider
@@ -41,6 +45,8 @@ logger = logging.getLogger(__name__)
 # Paths / constants
 # ---------------------------------------------------------------------------
 _TOKEN_FILE = "/data/claude_code_token.json"
+_SESSIONS_FILE = "/data/claude_code_sessions.json"        # Amira session id → CLI session uuid
+_INVENTORY_FILE = "/data/claude_code_inventory.json"      # last system/init event (MCP, skills, agents…)
 _PERSISTENT_BIN = "/data/claude-home/.local/bin/claude"   # maintained by the s6 run script
 _WORK_DIR = "/data/claude-work"                            # empty cwd → no CLAUDE.md discovered
 _TOKEN_PREFIX = "sk-ant-oat"
@@ -280,6 +286,95 @@ def get_status() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Persistent CLI sessions (native mode) and CLI inventory
+# ---------------------------------------------------------------------------
+
+_sessions_lock = threading.Lock()
+
+
+def _read_json(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_json(path: str, data: Dict[str, Any]) -> None:
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning(f"ClaudeCode: could not write {path}: {e}")
+
+
+def _transcript_exists(session_uuid: str) -> bool:
+    projects = os.path.join(_config_dir(), "projects")
+    try:
+        return any(
+            os.path.isfile(os.path.join(projects, d, f"{session_uuid}.jsonl"))
+            for d in os.listdir(projects)
+        )
+    except OSError:
+        return False
+
+
+def get_cli_session(amira_session_id: str) -> str:
+    """CLI session uuid mapped to an Amira chat session, if its transcript still exists."""
+    if not amira_session_id:
+        return ""
+    with _sessions_lock:
+        entry = _read_json(_SESSIONS_FILE).get(amira_session_id) or {}
+    sid = str(entry.get("uuid", ""))
+    return sid if sid and _transcript_exists(sid) else ""
+
+
+def set_cli_session(amira_session_id: str, session_uuid: str) -> None:
+    if not amira_session_id or not session_uuid:
+        return
+    with _sessions_lock:
+        data = _read_json(_SESSIONS_FILE)
+        data[amira_session_id] = {"uuid": session_uuid, "updated": int(time.time())}
+        _write_json(_SESSIONS_FILE, data)
+
+
+def forget_cli_session(amira_session_id: str) -> None:
+    """Drop the mapping so the next turn of this Amira session starts a new CLI session."""
+    with _sessions_lock:
+        data = _read_json(_SESSIONS_FILE)
+        if data.pop(amira_session_id, None) is not None:
+            _write_json(_SESSIONS_FILE, data)
+
+
+def _save_inventory(init_evt: Dict[str, Any]) -> None:
+    keys = ("claude_code_version", "model", "cwd", "tools", "mcp_servers", "skills",
+            "agents", "plugins", "memory_paths", "slash_commands")
+    inv = {k: init_evt.get(k) for k in keys}
+    inv["captured_at"] = int(time.time())
+    _write_json(_INVENTORY_FILE, inv)
+
+
+def get_inventory() -> Dict[str, Any]:
+    """What the CLI really loaded on its last turn, plus the auto-memory index."""
+    inv = _read_json(_INVENTORY_FILE)
+    mem_dir = ((inv.get("memory_paths") or {}).get("auto") or "").rstrip("/")
+    if mem_dir:
+        index = os.path.join(mem_dir, "MEMORY.md")
+        inv["memory_index_path"] = index
+        try:
+            inv["memory_files"] = sorted(f for f in os.listdir(mem_dir) if f.endswith(".md"))
+            with open(index, encoding="utf-8") as f:
+                inv["memory_index"] = f.read()
+        except OSError:
+            inv.setdefault("memory_files", [])
+            inv["memory_index"] = ""
+    return inv
+
+
+# ---------------------------------------------------------------------------
 # Provider class
 # ---------------------------------------------------------------------------
 
@@ -389,8 +484,21 @@ class ClaudeCodeProvider(EnhancedProvider):
                     "All of /data and /share survive restarts and add-on updates; the container filesystem does not.\n"
                     "Read live state before answering questions about devices; never guess."
                 )
-                if intent_base_prompt:
+                # The auto/chat intent prompts are guides to Amira's own tool layer
+                # (call_service, preview_automation_change…), which the CLI does not have.
+                if intent_base_prompt and intent_name not in ("auto", "chat"):
                     head = intent_base_prompt + "\n\n" + head
+                custom = str((intent_info or {}).get("custom_system_prompt") or "").strip()
+                if custom:
+                    head = "## User Instructions\n" + custom + "\n\n" + head
+                persona = str((intent_info or {}).get("agent_instructions") or "").strip()
+                agent_name = str((intent_info or {}).get("agent_name") or "").strip()
+                if persona or agent_name:
+                    head = (
+                        "## Assistant Persona (user-configured)\n"
+                        + (f"Your name is {agent_name}.\n" if agent_name else "")
+                        + persona + "\n\n" + head
+                    )
             else:
                 from providers.tool_simulator import get_simulator_system_prompt
                 head = (
@@ -514,35 +622,76 @@ class ClaudeCodeProvider(EnhancedProvider):
             yield {"type": "error", "message": "Claude Code: empty prompt"}
             return
 
+        native = native_tools_enabled()
+        amira_sid = str((intent_info or {}).get("session_id") or "") if native else ""
+        # Resume only when this Amira chat already has earlier turns: a cleared or
+        # new chat must not inherit an old CLI session.
+        resume_sid = get_cli_session(amira_sid) if amira_sid and len(turns) > 1 else ""
+        if resume_sid:
+            # The CLI transcript already holds the history, tool results included.
+            result = yield from self._run_cli(
+                binary, token, source, model, system_prompt,
+                self._build_prompt(turns[-1:], intent_info), amira_sid, resume_sid=resume_sid,
+            )
+            if result != "resume_failed":
+                return
+            logger.warning(f"ClaudeCode: could not resume CLI session {resume_sid}; starting a new one")
+            forget_cli_session(amira_sid)
+        yield from self._run_cli(binary, token, source, model, system_prompt, prompt, amira_sid)
+
+    def _run_cli(
+        self,
+        binary: str,
+        token: str,
+        source: str,
+        model: str,
+        system_prompt: str,
+        prompt: str,
+        amira_sid: str,
+        resume_sid: str = "",
+    ) -> Generator[Dict[str, Any], None, str]:
+        """Run one CLI turn. Returns "resume_failed" when --resume failed before any output."""
+        native = native_tools_enabled()
         cmd = [
             binary, "-p",
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
             "--model", model,
-            "--no-session-persistence",
         ]
-        if native_tools_enabled():
-            # Full Claude Code: built-in tools, settings, MCP, skills; no permission prompts.
+        if native:
+            # Full Claude Code: built-in tools, settings, MCP, skills, auto memory; no permission prompts.
             cmd += ["--dangerously-skip-permissions"]
+            if resume_sid:
+                # Re-render the system prompt so agent/intent changes apply to resumed sessions.
+                cmd += ["--resume", resume_sid, "--system-prompt-snapshot", "off"]
+            elif amira_sid:
+                cmd += ["--session-id", str(uuid.uuid4())]
+            else:
+                cmd += ["--no-session-persistence"]
         else:
             cmd += [
+                "--no-session-persistence",
                 "--tools", "",
                 "--setting-sources", "",
                 "--strict-mcp-config",
                 "--disable-slash-commands",
             ]
+        # Native mode appends to Claude Code's default system prompt, which carries the
+        # auto-memory, skills and subagent instructions; replacing it disables them.
+        sp_flag = "--append-system-prompt" if native else "--system-prompt"
         sp_file = None
         if len(system_prompt.encode("utf-8")) > _SYSTEM_PROMPT_ARGV_LIMIT:
             fd, sp_file = tempfile.mkstemp(prefix="amira-sp-", suffix=".txt")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(system_prompt)
-            cmd += ["--system-prompt-file", sp_file]
+            cmd += [sp_flag + "-file", sp_file]
         else:
-            cmd += ["--system-prompt", system_prompt]
+            cmd += [sp_flag, system_prompt]
 
         logger.info(
             f"ClaudeCode: running CLI (model={model}, auth={source}, "
+            f"session={'resume ' + resume_sid if resume_sid else (amira_sid or 'none')}, "
             f"prompt={len(prompt)} chars, system={len(system_prompt)} chars)"
         )
 
@@ -560,7 +709,7 @@ class ClaudeCodeProvider(EnhancedProvider):
                 )
             except OSError as e:
                 yield {"type": "error", "message": f"Claude Code: could not start CLI: {e}"}
-                return
+                return ""
 
             # Let Stop reach the CLI even while this generator is parked on a read.
             try:
@@ -569,7 +718,17 @@ class ClaudeCodeProvider(EnhancedProvider):
             except Exception:
                 pass
 
-            yield from self._pump(proc, prompt)
+            started = False
+            for evt in self._pump(proc, prompt):
+                if evt.get("type") == "_session":
+                    set_cli_session(amira_sid, evt.get("session_id", ""))
+                    continue
+                if resume_sid and not started and evt.get("type") == "error" and evt.get("_no_api_call"):
+                    return "resume_failed"
+                evt.pop("_no_api_call", None)
+                started = True
+                yield evt
+            return ""
         finally:
             if proc is not None:
                 try:
@@ -583,6 +742,21 @@ class ClaudeCodeProvider(EnhancedProvider):
                     os.remove(sp_file)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _tool_status(block: Dict[str, Any], subagent: bool) -> str:
+        name = str(block.get("name") or "tool")
+        args = block.get("input") or {}
+        detail = ""
+        if isinstance(args, dict):
+            for key in ("description", "command", "file_path", "pattern", "url", "query", "skill", "prompt"):
+                if args.get(key):
+                    detail = str(args[key]).replace("\n", " ")
+                    break
+        if len(detail) > 120:
+            detail = detail[:117] + "..."
+        prefix = "🤖 subagent · " if subagent else "🔧 "
+        return f"{prefix}{name}" + (f": {detail}" if detail else "")
 
     def _pump(self, proc: subprocess.Popen, prompt: str) -> Generator[Dict[str, Any], None, None]:
         lines: "queue.Queue[Optional[bytes]]" = queue.Queue()
@@ -619,6 +793,7 @@ class ClaudeCodeProvider(EnhancedProvider):
 
         deadline = time.monotonic() + self.timeout
         streamed_text = False
+        new_message = False        # a later assistant message starts: separate it from the previous text
         result: Optional[Dict[str, Any]] = None
 
         while True:
@@ -643,13 +818,31 @@ class ClaudeCodeProvider(EnhancedProvider):
                 continue
 
             etype = evt.get("type")
+            subagent = bool(evt.get("parent_tool_use_id"))
             if etype == "stream_event":
+                if subagent:
+                    continue   # subagent output belongs to its Agent tool result, not the reply
                 inner = evt.get("event") or {}
-                if inner.get("type") == "content_block_delta":
+                if inner.get("type") == "message_start" and streamed_text:
+                    new_message = True
+                elif inner.get("type") == "content_block_delta":
                     delta = inner.get("delta") or {}
                     if delta.get("type") == "text_delta" and delta.get("text"):
+                        text = delta["text"]
+                        if new_message:
+                            text = "\n\n" + text.lstrip("\n")
+                            new_message = False
                         streamed_text = True
-                        yield {"type": "text", "text": delta["text"]}
+                        yield {"type": "text", "text": text}
+            elif etype == "assistant":
+                # Complete assistant message: surface tool and subagent activity as status lines.
+                for block in (evt.get("message") or {}).get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        yield {"type": "status", "message": self._tool_status(block, subagent)}
+            elif etype == "system" and evt.get("subtype") == "init":
+                _save_inventory(evt)
+                if evt.get("session_id"):
+                    yield {"type": "_session", "session_id": evt["session_id"]}
             elif etype == "system" and evt.get("subtype") == "api_retry":
                 status = evt.get("error_status")
                 if status in (401, 403):
@@ -677,7 +870,10 @@ class ClaudeCodeProvider(EnhancedProvider):
         if result.get("is_error") or (result.get("subtype") or "success") != "success":
             msg = result.get("result") or "; ".join(str(e) for e in (result.get("errors") or [])) \
                 or str(result.get("subtype") or "unknown error")
-            yield {"type": "error", "message": self._map_error(str(msg))}
+            err_evt = {"type": "error", "message": self._map_error(str(msg))}
+            if not result.get("num_turns") and not result.get("duration_api_ms"):
+                err_evt["_no_api_call"] = True   # e.g. --resume of a missing session
+            yield err_evt
             return
 
         if not streamed_text and result.get("result"):

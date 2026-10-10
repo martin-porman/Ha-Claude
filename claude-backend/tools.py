@@ -2395,12 +2395,16 @@ def _get_mcp_tools_openai():
         return []
 
 
+# Tools hidden when ENABLE_FILE_ACCESS is off (same set as tool_registry's CONFIG category).
+# INTENT_TOOL_SETS["config_edit"] is None in LLM-first mode, so it cannot be used here.
+_CONFIG_FILE_TOOLS = {"read_config_file", "write_config_file", "list_config_files", "check_config"}
+
+
 def get_anthropic_tools():
     """Convert tools to Anthropic format."""
-    from intent import INTENT_TOOL_SETS
     tools = HA_TOOLS_DESCRIPTION
     if not api.ENABLE_FILE_ACCESS:
-        config_edit_tools = set(INTENT_TOOL_SETS.get("config_edit", []))
+        config_edit_tools = _CONFIG_FILE_TOOLS
         filtered_count = len([t for t in tools if t["name"] in config_edit_tools])
         logger.info(f"ENABLE_FILE_ACCESS=False: filtering {filtered_count} config_edit tools: {config_edit_tools}")
         tools = [t for t in tools if t["name"] not in config_edit_tools]
@@ -2418,10 +2422,9 @@ def get_anthropic_tools():
 
 def get_openai_tools():
     """Convert tools to OpenAI function-calling format."""
-    from intent import INTENT_TOOL_SETS
     tools = HA_TOOLS_DESCRIPTION
     if not api.ENABLE_FILE_ACCESS:
-        config_edit_tools = set(INTENT_TOOL_SETS.get("config_edit", []))
+        config_edit_tools = _CONFIG_FILE_TOOLS
         filtered_count = len([t for t in tools if t["name"] in config_edit_tools])
         logger.debug(f"OpenAI: filtering {filtered_count} config_edit tools")
         tools = [t for t in tools if t["name"] not in config_edit_tools]
@@ -2439,7 +2442,6 @@ def get_openai_tools():
 
 def get_gemini_tools(intent_info: dict | None = None):
     """Convert tools to Google Gemini format. If intent_info provided, filter to focused tools."""
-    from intent import INTENT_TOOL_SETS
     from google.genai import types
 
     def _sanitize_gemini_schema(obj):
@@ -2500,7 +2502,7 @@ def get_gemini_tools(intent_info: dict | None = None):
     else:
         all_tools = HA_TOOLS_DESCRIPTION
     if not api.ENABLE_FILE_ACCESS:
-        config_edit_tools = set(INTENT_TOOL_SETS.get("config_edit", []))
+        config_edit_tools = _CONFIG_FILE_TOOLS
         all_tools = [t for t in all_tools if t["name"] not in config_edit_tools]
     declarations = []
     for t in all_tools:

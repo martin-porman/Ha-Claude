@@ -246,6 +246,11 @@ def api_conversation_delete(session_id):
         import api as _api
         _api.save_conversations()
     session_last_intent.pop(session_id, None)
+    try:
+        from providers.claude_code import forget_cli_session
+        forget_cli_session(session_id)
+    except Exception as e:
+        logger.debug(f"Could not drop Claude Code session for {session_id}: {e}")
     return jsonify({"status": "ok", "message": f"Session '{session_id}' cleared."}), 200
 
 

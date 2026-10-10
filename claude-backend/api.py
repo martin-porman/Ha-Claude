@@ -1902,15 +1902,18 @@ def _apply_channel_agent(channel: str):
         yield
         return
 
+    _entered = False
     try:
         mgr = agent_config.get_agent_manager()
         agent_id = mgr.get_channel_agent(channel)
         if not agent_id:
+            _entered = True
             yield
             return
 
         agent = mgr.resolve_agent(agent_id)
         if not agent or not agent.model_config.primary:
+            _entered = True
             yield
             return
 
@@ -1933,6 +1936,7 @@ def _apply_channel_agent(channel: str):
 
         logger.info(f"Channel '{channel}' → agent '{agent_id}' ({ref.provider}/{ref.model})")
 
+        _entered = True
         try:
             yield
         finally:
@@ -1944,6 +1948,8 @@ def _apply_channel_agent(channel: str):
             else:
                 initialize_ai_client()
     except Exception as e:
+        if _entered:
+            raise   # the chat body failed; a second yield would mask it with a RuntimeError
         logger.warning(f"_apply_channel_agent('{channel}') error: {e}")
         yield
 
@@ -3753,6 +3759,14 @@ def _is_confirmation_reply(user_message: str) -> bool:
     return txt in confirms
 
 
+def _claude_code_native() -> bool:
+    """claude_code with CLAUDE_CODE_NATIVE_TOOLS: the CLI runs its own tools, streams plain text."""
+    if AI_PROVIDER != "claude_code":
+        return False
+    from providers.claude_code import native_tools_enabled
+    return native_tools_enabled()
+
+
 def stream_chat_with_ai(user_message: str, session_id: str = "default", image_data: str = None, read_only: bool = False, voice_mode: bool = False, req_language: str = None):
     """Stream chat events for all providers with optional image support. Yields SSE event dicts.
     Uses LOCAL intent detection + smart context to minimize tokens sent to AI API."""
@@ -3948,7 +3962,8 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
     }
     intent_key = INTENT_KEYS.get(intent_name, "intent_default")
     intent_label = tr(intent_key)
-    _tools_label = f" ({tool_count} tools)" if tool_count > 0 else ""
+    # Native Claude Code uses its own tools, not Amira's tool list.
+    _tools_label = f" ({tool_count} tools)" if tool_count > 0 and not _claude_code_native() else ""
     yield {"type": "status", "message": f"{intent_label}...{_tools_label}"}
 
     # Inject read-only instruction into intent prompt if read-only mode is active
@@ -4348,6 +4363,11 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
         # (e.g. claude_web reuses the same claude.ai conversation across turns).
         if intent_info is not None:
             intent_info["session_id"] = session_id
+            # claude_code builds its own CLI system prompt; give it the agent persona
+            # and custom prompt that get_system_prompt() adds for the other providers.
+            intent_info["agent_name"] = AGENT_NAME
+            intent_info["agent_instructions"] = AGENT_INSTRUCTIONS
+            intent_info["custom_system_prompt"] = CUSTOM_SYSTEM_PROMPT or ""
 
         # Tool execution loop: providers surface tool_calls in the done event;
         # we execute them here and loop until the model produces a final answer.
@@ -4577,7 +4597,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                 "moonshotai/kimi-k2-instruct-0905",  # Groq: describes actions but skips tool_call deltas
             }
             _is_no_tool_provider = (
-                AI_PROVIDER in _NO_TOOL_PROVIDERS
+                (AI_PROVIDER in _NO_TOOL_PROVIDERS and not _claude_code_native())
                 or get_active_model().lower() in _NO_NATIVE_TOOL_MODELS
             )
             _text_buffer: list = []
@@ -4586,6 +4606,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                 _mcp_guard_enabled
                 and not _mcp_guard_retry_used
                 and not _is_no_tool_provider
+                and not _claude_code_native()   # the CLI calls MCP itself; never buffer or re-run it
                 and _tool_round == 1
             )
             _mcp_guard_stream_buffer: list = []

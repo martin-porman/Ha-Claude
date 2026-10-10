@@ -90,6 +90,11 @@ _FAKE_CLAUDE = textwrap.dedent('''\
              "sp_file_content": open(sp_file).read() if sp_file else None}}
     with open(os.environ["FAKE_CLAUDE_DUMP"], "w") as f:
         json.dump(dump, f)
+    if mode == "resume_fail" and "--resume" in args:
+        sys.stderr.write("No conversation found with session ID: x\\n")
+        print(json.dumps({{"type": "result", "subtype": "error_during_execution", "is_error": True,
+                          "num_turns": 0, "duration_api_ms": 0, "session_id": "x"}}), flush=True)
+        sys.exit(1)
     if mode == "crash":
         sys.stderr.write("fatal: something broke\\n"); sys.exit(3)
     if mode == "hang":
@@ -117,6 +122,8 @@ def fake_claude(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", VALID_TOKEN)
     monkeypatch.setattr(cc, "_TOKEN_FILE", str(tmp_path / "claude_code_token.json"))
+    monkeypatch.setattr(cc, "_SESSIONS_FILE", str(tmp_path / "sessions.json"))
+    monkeypatch.setattr(cc, "_INVENTORY_FILE", str(tmp_path / "inventory.json"))
 
     class Fake:
         def set(self, lines, mode="ok"):
@@ -376,3 +383,123 @@ def test_routes_store_status_clear(fake_claude, tmp_path, monkeypatch):
 
     assert c.post("/api/oauth/claude_code/clear").get_json() == {"ok": True}
     assert not (tmp_path / "claude_code_token.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Native mode (CLAUDE_CODE_NATIVE_TOOLS=true): persistent CLI sessions
+# ---------------------------------------------------------------------------
+
+_HISTORY = [
+    {"role": "user", "content": "run ls"},
+    {"role": "assistant", "content": "STORED"},
+    {"role": "user", "content": "7th line?"},
+]
+
+
+@pytest.fixture
+def native(fake_claude, monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CODE_NATIVE_TOOLS", "true")
+    return fake_claude
+
+
+def _transcript(tmp_path, sid=_SESSION):
+    proj = tmp_path / "cfg" / "projects" / "-config"
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / f"{sid}.jsonl").write_text("{}\n")
+
+
+def test_native_first_turn_starts_named_session_and_appends_prompt(native):
+    events = _run(intent_info={"session_id": "1791000000000", "intent": "auto", "prompt": "TOOL GUIDE"})
+    assert events[-1]["type"] == "done"
+    argv = native.dump()["argv"]
+    assert "--append-system-prompt" in argv and "--system-prompt" not in argv
+    assert "--no-session-persistence" not in argv and "--resume" not in argv
+    assert len(argv[argv.index("--session-id") + 1]) == 36
+    sp = argv[argv.index("--append-system-prompt") + 1]
+    assert "TOOL GUIDE" not in sp            # Amira tool guide is not sent to the native CLI
+    # the init event's session id is remembered for this Amira session
+    assert json.loads(open(cc._SESSIONS_FILE).read())["1791000000000"]["uuid"] == _SESSION
+
+
+def test_native_resumes_and_sends_only_new_message(native, tmp_path):
+    _transcript(tmp_path)
+    cc.set_cli_session("s1", _SESSION)
+    _run(messages=list(_HISTORY), intent_info={"session_id": "s1", "intent": "auto"})
+    d = native.dump()
+    argv = d["argv"]
+    assert argv[argv.index("--resume") + 1] == _SESSION
+    assert argv[argv.index("--system-prompt-snapshot") + 1] == "off"
+    assert "--session-id" not in argv
+    assert d["stdin"] == "7th line?"
+
+
+def test_native_new_chat_does_not_resume(native, tmp_path):
+    _transcript(tmp_path)
+    cc.set_cli_session("s1", _SESSION)
+    _run(messages=[{"role": "user", "content": "hi"}], intent_info={"session_id": "s1"})
+    assert "--resume" not in native.dump()["argv"]
+
+
+def test_native_resume_failure_falls_back_to_new_session(native, tmp_path):
+    _transcript(tmp_path)
+    cc.set_cli_session("s1", _SESSION)
+    native.set(_OK_LINES, mode="resume_fail")
+    events = _run(messages=list(_HISTORY), intent_info={"session_id": "s1"})
+    assert not [e for e in events if e["type"] == "error"]
+    assert [e["text"] for e in events if e["type"] == "text"] == ["Hi", "!"]
+    d = native.dump()                       # second (fallback) invocation
+    assert "--resume" not in d["argv"] and "--session-id" in d["argv"]
+    assert "[CONVERSATION HISTORY]" in d["stdin"] and "STORED" in d["stdin"]
+
+
+def test_native_tool_status_separator_and_subagent_filter(native):
+    def delta(text, parent=None):
+        return {"type": "stream_event", "parent_tool_use_id": parent,
+                "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}}
+    start = {"type": "stream_event", "event": {"type": "message_start", "message": {}}}
+    lines = [
+        _OK_LINES[0], start, delta("Checking."),
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls /config"}}]}},
+        delta("SUBAGENT TEXT", parent="toolu_1"),
+        {"type": "assistant", "parent_tool_use_id": "toolu_1", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/config/a.yaml"}}]}},
+        start, delta("Done."),
+        {"type": "result", "subtype": "success", "is_error": False, "result": "Done.", "num_turns": 2,
+         "usage": {"input_tokens": 1, "output_tokens": 2}},
+    ]
+    native.set(lines)
+    events = _run(intent_info={"session_id": "s2"})
+    assert [e["text"] for e in events if e["type"] == "text"] == ["Checking.", "\n\nDone."]
+    status = [e["message"] for e in events if e["type"] == "status"]
+    assert status == ["🔧 Bash: ls /config", "🤖 subagent · Read: /config/a.yaml"]
+
+
+def test_native_persona_and_custom_prompt_reach_cli(native):
+    _run(intent_info={"session_id": "s3", "intent": "auto", "agent_name": "Opakas",
+                      "agent_instructions": "Answer in Estonian.", "custom_system_prompt": "Be brief."})
+    argv = native.dump()["argv"]
+    sp = argv[argv.index("--append-system-prompt") + 1]
+    assert "Your name is Opakas." in sp and "Answer in Estonian." in sp and "Be brief." in sp
+
+
+def test_native_inventory_saved_from_init(native, tmp_path):
+    lines = [dict(_OK_LINES[0], mcp_servers=[{"name": "kindly", "status": "connected"}],
+                  skills=["ha-config-editing"], memory_paths={"auto": str(tmp_path / "mem") + "/"})]
+    lines += _OK_LINES[1:]
+    (tmp_path / "mem").mkdir()
+    (tmp_path / "mem" / "MEMORY.md").write_text("- [colour](c.md)\n")
+    native.set(lines)
+    _run(intent_info={"session_id": "s4"})
+    inv = cc.get_inventory()
+    assert inv["mcp_servers"][0]["name"] == "kindly"
+    assert inv["skills"] == ["ha-config-editing"]
+    assert inv["memory_index"].startswith("- [colour]")
+
+
+def test_forget_cli_session(native, tmp_path):
+    _transcript(tmp_path)
+    cc.set_cli_session("s5", _SESSION)
+    assert cc.get_cli_session("s5") == _SESSION
+    cc.forget_cli_session("s5")
+    assert cc.get_cli_session("s5") == ""

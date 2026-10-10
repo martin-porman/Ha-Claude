@@ -16,6 +16,7 @@ Endpoints:
 - GET /api/oauth/claude_code/status
 - POST /api/oauth/claude_code/store
 - POST /api/oauth/claude_code/clear
+- GET /api/oauth/claude_code/inventory
 - POST /api/session/chatgpt_web/store
 - GET /api/session/chatgpt_web/status
 - POST /api/session/chatgpt_web/clear
@@ -231,7 +232,14 @@ def api_oauth_claude_code_store():
         token = str(data.get("token", "")).strip()
         if not token:
             return jsonify({"error": "Missing token"}), 400
-        return jsonify(store_token(token)), 200
+        result = store_token(token)
+        # An earlier auth error puts claude_code in a permanent cooldown; a new token ends it.
+        try:
+            from model_fallback import clear_cooldown
+            clear_cooldown("claude_code")
+        except Exception:
+            pass
+        return jsonify(result), 200
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -248,6 +256,19 @@ def api_oauth_claude_code_clear():
         return jsonify({"ok": True}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+
+@oauth_bp.route('/api/oauth/claude_code/inventory', methods=['GET'])
+def api_oauth_claude_code_inventory():
+    """MCP servers, skills, agents, plugins and auto memory the CLI loaded on its last turn."""
+    try:
+        from providers.claude_code import get_inventory, native_tools_enabled
+        inv = get_inventory()
+        inv["native"] = native_tools_enabled()
+        return jsonify(inv), 200
+    except Exception as e:
+        logger.error(f"Claude Code inventory error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------

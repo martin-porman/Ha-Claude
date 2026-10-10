@@ -495,7 +495,8 @@ def api_settings_post():
 
     clean = {}
     for key in SETTINGS_DEFAULTS:
-        if key in data:
+        # "***" is the mask GET sends for stored secrets; saving it back would erase them.
+        if key in data and data[key] != "***":
             clean[key] = data[key]
 
     try:

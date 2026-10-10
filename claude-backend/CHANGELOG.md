@@ -2,6 +2,33 @@
 
 > **⚠️ After updating, rebuild the add-on** (Settings → Add-ons → Amira → Rebuild) to apply new dependencies.
 
+## 4.8.1-native11 — Claude Code sessions, auto memory, real MCP/skills lists
+
+### Fixed (native Claude Code mode)
+- **Chats keep their Claude Code session.** Each Amira chat maps to one CLI session: `--session-id` on the first turn, `--resume` afterwards, sending only the new message. Tool results and subagent work now survive between turns (before, every turn was a fresh `--no-session-persistence` run fed a text replay). Map in `/data/claude_code_sessions.json`; deleting a chat drops it; a failed resume falls back to a new session with the replay.
+- **Auto memory works from an empty memory folder.** Amira's prompt is passed with `--append-system-prompt`; `--system-prompt` replaced Claude Code's default prompt, which carries the memory instructions. `--system-prompt-snapshot off` on resume so agent or intent changes still apply.
+- **Agent instructions and the Custom System Prompt reach the CLI**, and Amira's 53-tool guide (`call_service`, `preview_automation_change`…) is no longer sent for auto/chat turns. Editing the active agent applies at once.
+- **Native replies stream** and are no longer run through the tool simulator, the "Action NOT executed" replacement, the backend's own on/off fallback action or the MCP-guard retry.
+- **Tool and subagent activity** shows as status lines (`🔧 Bash: …`, `🤖 subagent · …`), also after text has started; consecutive assistant messages are separated by a blank line.
+
+### New
+- `GET /api/oauth/claude_code/inventory`: MCP servers, skills, subagents, plugins and auto-memory index the CLI loaded on its last turn (`/data/claude_code_inventory.json`). Shown in Skills, MCP Configuration and Memory.
+- Markdown tables render in the chat.
+
+### Fixed (general)
+- Settings → Save no longer overwrites Telegram/Twilio/Discord tokens with the `***` mask.
+- Stop aborts the current chat (it sent no session id, so the backend aborted session `default`).
+- Storing a new Claude Code token clears the permanent cooldown left by an earlier auth error.
+- Claude Code error messages are shown as-is instead of "An error occurred".
+- Agent editor gets `emoji`, `is_default`, `fallbacks`, `description`, `enabled`; saving no longer resets them.
+- Cron: `mon-fri`, `0-6`, `1-5/2`, `5/20` parse correctly (were empty or rejected).
+- Smart context no longer crashes (NameError) on "new automation" requests.
+- Tool listing no longer raises TypeError when file access is off.
+- Skill autocomplete and skill deactivate use the ingress URL.
+- `_apply_channel_agent` no longer turns chat errors into `generator didn't stop after throw()`.
+
+---
+
 ## 4.8.1-native10 — Terminal behind HA login, image paste, gh
 
 ### Security

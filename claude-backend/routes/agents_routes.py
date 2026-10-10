@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 agents_bp = Blueprint('agents', __name__)
 
 
+def _agent_form_dict(a) -> dict:
+    """agents.json shape plus the flat fields the agent editor reads (emoji, is_default, fallbacks…)."""
+    d = a.to_dict()
+    d["emoji"] = a.identity.emoji or "\U0001f916"
+    d["description"] = a.identity.description or a.description or ""
+    d["is_default"] = a.is_default
+    d["enabled"] = a.enabled
+    d["fallbacks"] = [f.to_string() for f in a.model_config.fallbacks]
+    return d
+
+
 @agents_bp.route('/api/agents', methods=['GET'])
 def api_agents_list():
     """List all agents with their configuration."""
@@ -31,7 +42,7 @@ def api_agents_list():
         mgr = _api.agent_config.get_agent_manager()
         include_disabled = request.args.get("include_disabled", "false").lower() == "true"
         agents = mgr.get_agents_for_api() if not include_disabled else [
-            a.to_dict() for a in mgr.list_agents(include_disabled=True)
+            _agent_form_dict(a) for a in mgr.list_agents(include_disabled=True)
         ]
         active = mgr.get_active_agent()
         return jsonify({
@@ -94,6 +105,10 @@ def api_agent_update(agent_id):
         if not updated:
             return jsonify({"success": False, "error": f"Agent '{agent_id}' not found"}), 404
         mgr.save_config()
+        # Edits to the active agent (instructions, name) must reach the next chat turn.
+        active = mgr.get_active_agent()
+        if active and active.id == agent_id:
+            _api._sync_active_agent_globals()
         return jsonify({"success": True, "agent": updated.to_dict()}), 200
     except Exception as e:
         logger.error(f"api_agent_update error: {e}")

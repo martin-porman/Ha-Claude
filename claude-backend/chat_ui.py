@@ -3690,7 +3690,7 @@ def get_chat_ui():
         (function() {{
           const menu = document.getElementById('skillSlashMenu');
           let skills = [], activeIdx = -1;
-          fetch('/api/skills').then(r => r.json()).then(d => {{ skills = (d.skills || []).filter(s => s.installed !== false); }}).catch(() => {{}});
+          fetch(apiUrl('api/skills')).then(r => r.json()).then(d => {{ skills = (d.skills || []).filter(s => s.installed !== false); }}).catch(() => {{}});
           function _desc(s) {{
             const d = s.description;
             return (typeof d === 'object' ? d['{ui_lang}'] || d['en'] || Object.values(d)[0] : d) || '';
@@ -5686,6 +5686,15 @@ def get_chat_ui():
                 + '<pre id="mcpPipLog" style="display:none;margin-top:6px;padding:8px;background:#1a1a2a;color:#a0d8a0;font-size:11px;border-radius:6px;white-space:pre-wrap;max-height:140px;overflow-y:auto;"></pre>';
             wrap.appendChild(installSection);
 
+            // MCP servers the Claude Code CLI uses in chat (its own config, not this file)
+            const ccInvHtml = renderClaudeCodeInventory('mcp', await fetchClaudeCodeInventory());
+            if (ccInvHtml) {{
+                const ccBox = document.createElement('div');
+                ccBox.style.cssText = 'padding:0 14px;border-bottom:1px solid #eee;';
+                ccBox.innerHTML = ccInvHtml + '<div style="font-weight:600;font-size:13px;margin:8px 0 4px;color:#444;">\U0001f50c Amira (' + _escapeHtml(mcpFilePath || 'amira/mcp_config.json') + ')</div>';
+                wrap.appendChild(ccBox);
+            }}
+
             const listWrap = document.createElement('div');
             listWrap.style.cssText = 'flex:1;overflow-y:auto;padding:8px;';
             await _refreshMcpRuntime();
@@ -5950,6 +5959,17 @@ def get_chat_ui():
             const charLabel = editorType === 'memory' ? (T.memory_lines || 'lines') : (T.prompt_chars || 'characters');
             statsBar.innerHTML = '<span id="editorStatCount">0</span> ' + charLabel;
             wrap.appendChild(statsBar);
+
+            if (editorType === 'memory') {{
+                // Native chat writes its memory to Claude Code's auto memory, shown here read-only.
+                const ccInvHtml = renderClaudeCodeInventory('memory', await fetchClaudeCodeInventory());
+                if (ccInvHtml) {{
+                    const ccBox = document.createElement('div');
+                    ccBox.style.cssText = 'padding:0 14px;max-height:45%;overflow:auto;border-bottom:1px solid #eee;';
+                    ccBox.innerHTML = ccInvHtml + '<div style="font-weight:600;font-size:13px;margin:8px 0 4px;color:#444;">\U0001f9e0 Amira (' + _escapeHtml(cf.file) + ')</div>';
+                    wrap.appendChild(ccBox);
+                }}
+            }}
 
             // Textarea
             const bodyDiv = document.createElement('div');
@@ -7279,6 +7299,54 @@ def get_chat_ui():
             return window.location.origin.replace(/\\/$/, '') + basePath + cleanPath;
         }}
 
+        // What the Claude Code CLI really loaded on its last chat turn (native mode).
+        // Amira's own skills/MCP/memory lists do not cover these.
+        async function fetchClaudeCodeInventory() {{
+            try {{
+                const r = await fetch(apiUrl('api/oauth/claude_code/inventory'), {{ credentials: 'same-origin' }});
+                return r.ok ? await r.json() : null;
+            }} catch (e) {{ return null; }}
+        }}
+
+        function renderClaudeCodeInventory(kind, inv) {{
+            if (!inv || !inv.native) return '';
+            const box = 'background:#eef7f0;border-radius:8px;padding:9px 11px;margin-bottom:7px;font-size:12px;color:#333;';
+            let html = '<div style="font-weight:600;font-size:13px;margin:12px 0 8px;color:#444;">🔑 Claude Code (' + (T.cc_inv_native || 'native, used by chat') + ')</div>';
+            if (!inv.captured_at) {{
+                return html + '<div style="color:#999;font-size:12px;margin-bottom:12px;">' + (T.cc_inv_empty || 'Send one chat message to load the list.') + '</div>';
+            }}
+            if (kind === 'skills') {{
+                const skills = inv.skills || [];
+                html += '<div style="' + box + '">' + (skills.length
+                    ? skills.map(s => '<span style="display:inline-block;background:#d8eedd;border-radius:4px;padding:1px 6px;margin:2px;font-family:monospace;">/' + _escapeHtml(s) + '</span>').join('')
+                    : (T.skills_empty || 'No skills installed.')) + '</div>';
+                const agents = inv.agents || [];
+                if (agents.length) {{
+                    html += '<div style="' + box + '"><b>' + (T.cc_inv_agents || 'Subagents') + ':</b> ' + agents.map(_escapeHtml).join(', ') + '</div>';
+                }}
+                const plugins = (inv.plugins || []).filter(p => p.path !== 'builtin');
+                if (plugins.length) {{
+                    html += '<div style="' + box + '"><b>Plugins:</b> ' + plugins.map(p => _escapeHtml(p.name + (p.version ? ' ' + p.version : ''))).join(', ') + '</div>';
+                }}
+            }} else if (kind === 'mcp') {{
+                const servers = inv.mcp_servers || [];
+                html += servers.length ? servers.map(s => {{
+                    const ok = s.status === 'connected';
+                    return '<div style="' + box + 'display:flex;justify-content:space-between;"><span style="font-weight:600;">' + _escapeHtml(s.name) + '</span>'
+                        + '<span style="color:' + (ok ? '#2e7d32' : '#b26a00') + ';">● ' + _escapeHtml(s.status || '') + (s.source ? ' · ' + _escapeHtml(s.source) : '') + '</span></div>';
+                }}).join('') : '<div style="' + box + '">' + (T.cc_inv_no_mcp || 'No MCP servers.') + '</div>';
+                html += '<div style="font-size:11px;color:#888;margin-bottom:10px;">' + (T.cc_inv_mcp_hint || 'Manage with `claude mcp add/remove` in the Terminal.') + '</div>';
+            }} else if (kind === 'memory') {{
+                html += '<div style="font-size:11px;color:#888;margin-bottom:4px;font-family:monospace;">' + _escapeHtml(inv.memory_index_path || '') + '</div>';
+                html += '<pre style="' + box + 'white-space:pre-wrap;max-height:240px;overflow:auto;">' + _escapeHtml(inv.memory_index || (T.cc_inv_no_memory || '(empty)')) + '</pre>';
+                if ((inv.memory_files || []).length) {{
+                    html += '<div style="font-size:11px;color:#888;margin-bottom:10px;">' + inv.memory_files.map(_escapeHtml).join(', ') + '</div>';
+                }}
+            }}
+            const when = new Date(inv.captured_at * 1000).toLocaleString();
+            return html + '<div style="font-size:10px;color:#aaa;margin-bottom:12px;">' + (T.cc_inv_captured || 'From the last chat turn') + ' · ' + when + ' · ' + _escapeHtml(inv.claude_code_version || '') + '</div>';
+        }}
+
         async function _askRestartAddon(statusEl) {{
             if (!confirm(T.restart_confirm || 'Some changes require a restart to take effect. Restart the add-on now?')) return;
             if (statusEl) {{
@@ -7315,7 +7383,7 @@ def get_chat_ui():
         async function handleButtonClick() {{
             if (sending) {{
                 try {{
-                    await fetch(apiUrl('api/chat/abort'), {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: '{{}}' }});
+                    await fetch(apiUrl('api/chat/abort'), {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ session_id: currentSessionId }}) }});
                     if (currentReader) {{ currentReader.cancel(); currentReader = null; }}
                 }} catch(e) {{ console.error('Abort error:', e); }}
                 removeThinking();
@@ -7771,6 +7839,22 @@ def get_chat_ui():
                 codeBlocks.push(html);
                 return '%%CODE_' + (codeBlocks.length - 1) + '%%';
             }});
+            // 2b. Markdown tables (header row, |---| separator, body rows) → placeholders
+            var tableBlocks = [];
+            text = text.replace(/(^|\\n)(\\|[^\\n]*\\|[ \\t]*\\n\\|[ \\t:|-]*-[ \\t:|-]*\\|[ \\t]*(?:\\n\\|[^\\n]*\\|[ \\t]*)*)/g, function(m, lead, block) {{
+                var rows = block.trim().split('\\n');
+                var cellCss = 'border:1px solid rgba(128,128,128,.4);padding:3px 8px;text-align:left;vertical-align:top;';
+                function cells(r, tag) {{
+                    return r.trim().replace(/^\\||\\|$/g, '').split('|').map(function(c) {{
+                        c = c.trim().replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+                        return '<' + tag + ' style="' + cellCss + '">' + c + '</' + tag + '>';
+                    }}).join('');
+                }}
+                var html = '<table style="border-collapse:collapse;margin:6px 0;"><thead><tr>' + cells(rows[0], 'th') + '</tr></thead><tbody>';
+                for (var r = 2; r < rows.length; r++) html += '<tr>' + cells(rows[r], 'td') + '</tr>';
+                tableBlocks.push(html + '</tbody></table>');
+                return lead + '%%TABLE_' + (tableBlocks.length - 1) + '%%';
+            }});
             // 3. Inline code, bold, newlines — code blocks are placeholders, safe to process
             text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
             text = text.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
@@ -7778,6 +7862,10 @@ def get_chat_ui():
             // 4. Restore code blocks
             for (var i = 0; i < codeBlocks.length; i++) {{
                 text = text.replace('%%CODE_' + i + '%%', codeBlocks[i]);
+            }}
+            // 4a. Restore tables
+            for (var i = 0; i < tableBlocks.length; i++) {{
+                text = text.replace('%%TABLE_' + i + '%%', tableBlocks[i]);
             }}
             // 4b. Restore diff HTML blocks (untouched by markdown transforms)
             for (var i = 0; i < diffBlocks.length; i++) {{
@@ -8245,8 +8333,15 @@ def get_chat_ui():
                             }} else if (evt.type === 'status') {{
                                 // Update thinking bubble with current status and keep timer running
                                 const msg = evt.message || evt.content || evt.status || evt.text || '';
-                                updateThinkingBaseText('\u23f3 ' + msg);
-                                addThinkingStep(msg);
+                                if (gotAnyToken && div) {{
+                                    // The thinking bubble is gone once text streams (e.g. a tool
+                                    // call after an intro sentence): add the step to the reply.
+                                    pendingSteps = (pendingSteps || []).concat([msg]);
+                                    div.innerHTML = '<div class="progress-steps">' + renderStepLines(pendingSteps) + '</div>' + formatMarkdown(fullText);
+                                }} else {{
+                                    updateThinkingBaseText('\u23f3 ' + msg);
+                                    addThinkingStep(msg);
+                                }}
                             }} else if (evt.type === 'fallback_notice') {{
                                 // Provider fallback notification — show system message
                                 const origProv = (PROVIDER_LABELS[evt.original_provider] || evt.original_provider || '?');
@@ -8498,9 +8593,10 @@ def get_chat_ui():
             if (!panel) return;
             panel.innerHTML = '<div style="padding:16px;text-align:center;color:#999;">' + (T.skills_store_loading || 'Loading...') + '</div>';
             try {{
-                const [instResp, storeResp] = await Promise.all([
+                const [instResp, storeResp, ccInv] = await Promise.all([
                     fetch(apiUrl('api/skills')),
-                    fetch(apiUrl('api/skills/store'))
+                    fetch(apiUrl('api/skills/store')),
+                    fetchClaudeCodeInventory()
                 ]);
                 const instData  = instResp.ok  ? await instResp.json()  : {{}};
                 const storeData = storeResp.ok ? await storeResp.json() : {{}};
@@ -8539,6 +8635,8 @@ def get_chat_ui():
                         </div>`;
                     }});
                 }}
+
+                html += renderClaudeCodeInventory('skills', ccInv);
 
                 // ---- store section ----
                 html += '<div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px;">';
@@ -9384,7 +9482,7 @@ def get_chat_ui():
 
         async function deactivateSkill() {{
             try {{
-                await fetch('/api/chat/skill/deactivate', {{
+                await fetch(apiUrl('api/chat/skill/deactivate'), {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/json'}},
                     body: JSON.stringify({{session_id: currentSessionId}})
