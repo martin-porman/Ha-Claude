@@ -98,7 +98,7 @@ COPY fallback.py .
 COPY quality_metrics.py .
 COPY tool_optimizer.py .
 COPY semantic_cache.py .
-COPY mcp.py .
+COPY amira_mcp.py .
 COPY mcp_auth.py .
 COPY mcp_oauth.py .
 COPY scheduled_tasks.py .

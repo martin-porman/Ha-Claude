@@ -160,6 +160,7 @@ def _work(session_id: str, run: Run) -> None:
                 read_only=job.get("read_only", False),
                 voice_mode=job.get("voice_mode", False),
                 req_language=job.get("language"),
+                agent_id=job.get("agent_id"),
             )
             for event in gen:
                 run.emit(event)

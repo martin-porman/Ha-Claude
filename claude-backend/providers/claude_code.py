@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 _TOKEN_FILE = "/data/claude_code_token.json"
 _SESSIONS_FILE = "/data/claude_code_sessions.json"        # Amira session id → CLI session uuid
 _INVENTORY_FILE = "/data/claude_code_inventory.json"      # last system/init event (MCP, skills, agents…)
+_AGENT_MEMORY_ROOT = "/data/claude/agent-memory"           # one auto-memory folder per Amira agent
 _PERSISTENT_BIN = "/data/claude-home/.local/bin/claude"   # maintained by the s6 run script
 _WORK_DIR = "/data/claude-work"                            # empty cwd → no CLAUDE.md discovered
 _TOKEN_PREFIX = "sk-ant-oat"
@@ -349,6 +350,25 @@ def forget_cli_session(amira_session_id: str) -> None:
             _write_json(_SESSIONS_FILE, data)
 
 
+def agent_memory_dir(agent_id: str) -> str:
+    """Auto-memory folder for an Amira agent, created on first use and seeded once
+    with the shared memory (the CLI's default folder for the working directory)."""
+    if not agent_id or not re.match(r"^[A-Za-z0-9_-]{1,64}$", agent_id):
+        return ""
+    path = os.path.join(_AGENT_MEMORY_ROOT, agent_id)
+    if not os.path.isdir(path):
+        shared = os.path.join(_config_dir(), "projects", re.sub(r"[^A-Za-z0-9]", "-", _work_dir()), "memory")
+        try:
+            if os.path.isdir(shared):
+                shutil.copytree(shared, path)
+            else:
+                os.makedirs(path, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"ClaudeCode: could not create agent memory {path}: {e}")
+            return ""
+    return path + "/"
+
+
 def _save_inventory(init_evt: Dict[str, Any]) -> None:
     keys = ("claude_code_version", "model", "cwd", "tools", "mcp_servers", "skills",
             "agents", "plugins", "memory_paths", "slash_commands")
@@ -483,6 +503,11 @@ class ClaudeCodeProvider(EnhancedProvider):
                     "/data/claude/skills/<name>/SKILL.md; plugins via `claude plugin marketplace add` / `claude plugin install`; "
                     "MCP servers via `claude mcp add` or /data/claude/.claude.json. npm (-g) and uv/uvx installs persist under /data. "
                     "All of /data and /share survive restarts and add-on updates; the container filesystem does not.\n"
+                    "- Amira scheduled tasks (cron → a message to you, reply saved in chat `cron_<task_id>`): REST on "
+                    "http://127.0.0.1:5010 with header `X-Amira-Token: $(python3 -c \"import json;print(json.load(open('/config/amira/settings.json'))['amira_api_token'])\")`. "
+                    "GET /api/scheduled/tasks; POST /api/scheduled/tasks {name, cron, message, description?, enabled?}; "
+                    "DELETE /api/scheduled/tasks/<id>; POST /api/scheduled/tasks/<id>/toggle {enabled}. "
+                    "Use these for recurring jobs: CronCreate/ScheduleWakeup end with this process.\n"
                     "Read live state before answering questions about devices; never guess."
                 )
                 # The auto/chat intent prompts are guides to Amira's own tool layer
@@ -627,6 +652,7 @@ class ClaudeCodeProvider(EnhancedProvider):
 
         native = native_tools_enabled()
         amira_sid = str((intent_info or {}).get("session_id") or "") if native else ""
+        agent_id = str((intent_info or {}).get("agent_id") or "") if native else ""
         # Resume only when this Amira chat already has earlier turns: a cleared or
         # new chat must not inherit an old CLI session.
         resume_sid = get_cli_session(amira_sid) if amira_sid and len(turns) > 1 else ""
@@ -635,12 +661,13 @@ class ClaudeCodeProvider(EnhancedProvider):
             result = yield from self._run_cli(
                 binary, token, source, model, system_prompt,
                 self._build_prompt(turns[-1:], intent_info), amira_sid, resume_sid=resume_sid,
+                agent_id=agent_id,
             )
             if result != "resume_failed":
                 return
             logger.warning(f"ClaudeCode: could not resume CLI session {resume_sid}; starting a new one")
             forget_cli_session(amira_sid)
-        yield from self._run_cli(binary, token, source, model, system_prompt, prompt, amira_sid)
+        yield from self._run_cli(binary, token, source, model, system_prompt, prompt, amira_sid, agent_id=agent_id)
 
     def _run_cli(
         self,
@@ -652,6 +679,7 @@ class ClaudeCodeProvider(EnhancedProvider):
         prompt: str,
         amira_sid: str,
         resume_sid: str = "",
+        agent_id: str = "",
     ) -> Generator[Dict[str, Any], None, str]:
         """Run one CLI turn. Returns "resume_failed" when --resume failed before any output."""
         native = native_tools_enabled()
@@ -672,6 +700,9 @@ class ClaudeCodeProvider(EnhancedProvider):
                 cmd += ["--session-id", str(uuid.uuid4())]
             else:
                 cmd += ["--no-session-persistence"]
+            mem_dir = agent_memory_dir(agent_id)
+            if mem_dir:
+                cmd += ["--settings", json.dumps({"autoMemoryDirectory": mem_dir})]
         else:
             cmd += [
                 "--no-session-persistence",
@@ -873,7 +904,7 @@ class ClaudeCodeProvider(EnhancedProvider):
         if result.get("is_error") or (result.get("subtype") or "success") != "success":
             msg = result.get("result") or "; ".join(str(e) for e in (result.get("errors") or [])) \
                 or str(result.get("subtype") or "unknown error")
-            err_evt = {"type": "error", "message": self._map_error(str(msg))}
+            err_evt: Dict[str, Any] = {"type": "error", "message": self._map_error(str(msg))}
             if not result.get("num_turns") and not result.get("duration_api_ms"):
                 err_evt["_no_api_call"] = True   # e.g. --resume of a missing session
             yield err_evt

@@ -517,3 +517,34 @@ def test_native_active_amira_skill_keeps_native_head(native):
     argv = native.dump()["argv"]
     sp = argv[argv.index("--append-system-prompt") + 1]
     assert "SKILL INSTRUCTIONS (mushroom)" in sp and "Home Assistant add-on called Amira" in sp
+
+
+def test_native_agent_gets_own_memory_dir_seeded_from_shared(native, tmp_path, monkeypatch):
+    monkeypatch.setattr(cc, "_AGENT_MEMORY_ROOT", str(tmp_path / "agent-memory"))
+    shared = tmp_path / "cfg" / "projects" / cc.re.sub(r"[^A-Za-z0-9]", "-", str(tmp_path / "work")) / "memory"
+    shared.mkdir(parents=True)
+    (shared / "MEMORY.md").write_text("- shared fact\n")
+    _run(intent_info={"session_id": "s8", "agent_id": "gpt"})
+    argv = native.dump()["argv"]
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings["autoMemoryDirectory"] == str(tmp_path / "agent-memory" / "gpt") + "/"
+    assert (tmp_path / "agent-memory" / "gpt" / "MEMORY.md").read_text() == "- shared fact\n"
+
+
+def test_native_rejects_unsafe_agent_id_for_memory(native, tmp_path, monkeypatch):
+    monkeypatch.setattr(cc, "_AGENT_MEMORY_ROOT", str(tmp_path / "agent-memory"))
+    _run(intent_info={"session_id": "s9", "agent_id": "../etc"})
+    assert "--settings" not in native.dump()["argv"]
+
+
+def test_scheduler_agent_runs_through_claude_code(native, tmp_path, monkeypatch):
+    import scheduler_agent
+    monkeypatch.setattr(scheduler_agent, "_SESSIONS_FILE", str(tmp_path / "sched.json"))
+    reply = scheduler_agent.chat("list my tasks", session_id="u1")
+    assert reply == "Hi!"
+    d = native.dump()
+    assert "--append-system-prompt" in d["argv"]
+    sp = d["argv"][d["argv"].index("--append-system-prompt") + 1]
+    assert "SchedulerAgent" in sp and "/api/scheduled/tasks" in sp
+    assert scheduler_agent.get_session_history("u1")[-1] == {"role": "assistant", "content": "Hi!"}
+    assert "u1" in scheduler_agent.list_sessions()

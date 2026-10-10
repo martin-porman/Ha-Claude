@@ -27,6 +27,15 @@ def current_session() -> Optional[str]:
     return getattr(_local, "session_id", None)
 
 
+def set_agent(agent_id: Optional[str]) -> None:
+    """Agent for turns run by this thread (channel bots), without touching the global agent."""
+    _local.agent_id = agent_id
+
+
+def current_agent() -> Optional[str]:
+    return getattr(_local, "agent_id", None)
+
+
 def register(proc: Any) -> None:
     """Bind a just-spawned subprocess to the session running in this thread."""
     sid = current_session()

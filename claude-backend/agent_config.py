@@ -492,8 +492,8 @@ class AgentManager:
         """Get the currently active agent."""
         return self.resolve_agent()
 
-    def set_active_agent(self, agent_id: str) -> bool:
-        """Switch the active agent and persist the selection."""
+    def set_active_agent(self, agent_id: str, persist: bool = True) -> bool:
+        """Switch the active agent and (by default) persist the selection."""
         with self._lock:
             agent = self._agents.get(agent_id)
             if not agent or not agent.enabled:
@@ -501,7 +501,8 @@ class AgentManager:
             self._active_agent_id = agent_id
         logger.info(f"AgentManager: active agent set to '{agent_id}'")
         # Persist selection to disk so it survives restarts and config reloads
-        self._save_active_agent(agent_id)
+        if persist:
+            self._save_active_agent(agent_id)
         return True
     
     def _save_active_agent(self, agent_id: str) -> None:

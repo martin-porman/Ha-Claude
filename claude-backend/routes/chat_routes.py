@@ -119,6 +119,7 @@ def api_chat_stream():
         "read_only": read_only,
         "voice_mode": voice_mode,
         "language": req_language,
+        "agent_id": (data.get("agent_id") or "").strip() or None,
     }
     placed = turn_queue.submit(session_id, job)
 

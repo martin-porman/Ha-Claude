@@ -10,7 +10,8 @@ from typing import Optional
 import api
 
 try:
-    import mcp
+    # Named amira_mcp so it does not shadow the official `mcp` SDK it imports.
+    import amira_mcp as mcp
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False

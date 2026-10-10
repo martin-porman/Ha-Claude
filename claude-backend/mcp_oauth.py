@@ -13,7 +13,7 @@ Flow:
        GET /api/mcp/oauth/callback?code=...&state=...
        → exchanges code for access_token + refresh_token
        → saves tokens to /config/amira/mcp_oauth_tokens.json
-  3. mcp.py calls get_oauth_headers(server_name) before each HTTP request
+  3. amira_mcp.py calls get_oauth_headers(server_name) before each HTTP request
        → returns {"Authorization": "Bearer <token>"}
        → auto-refreshes token if expired
 

@@ -143,6 +143,9 @@ def main() -> None:
             }
             api.logger.warning(fix_msgs.get(api.LANGUAGE, fix_msgs["en"]))
 
+    # Scheduler, agents, catalog, caches, voice (previously only in api.py's __main__)
+    api.init_background_services()
+
     # Register floating chat bubble (if enabled)
     api.setup_chat_bubble()
 

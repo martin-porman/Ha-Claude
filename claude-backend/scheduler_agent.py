@@ -1,25 +1,23 @@
-"""SchedulerAgent — agente conversazionale per la gestione dei task pianificati.
+"""SchedulerAgent — conversational management of Amira's scheduled tasks.
 
-Usa Claude (Anthropic) con tool_use nativo per un'interfaccia chat-friendly:
-  l'utente può scrivere in linguaggio naturale e l'agente crea, elenca,
-  elimina e abilita/disabilita task pianificati.
+Runs through Claude Code (the claude_code provider, native mode, subscription
+OAuth token): Claude reads and changes tasks with Amira's scheduler REST API
+(/api/scheduled/tasks) using its own Bash tool. One persistent Claude Code
+session per SchedulerAgent session_id.
 
-Sessioni con memoria: ogni session_id mantiene la propria cronologia.
-
-Endpoint dedicato in api.py: POST /api/agent/scheduler
+Endpoint: POST /api/agent/scheduler (routes/scheduled_routes.py)
 """
 
 import json
 import logging
 import os
-import uuid
-from typing import Optional
+import threading
+
 from core.translations import tr
 
 logger = logging.getLogger(__name__)
 
 # ── Language-aware response instruction ────────────────────────────────────────
-# Mirrors the respond_instruction pattern used in api.py LANGUAGE_TEXT
 
 _RESPOND_INSTRUCTION: dict = {
     "en": "Respond in English.",
@@ -39,25 +37,27 @@ _CRON_TABLE = """\
 | Friday at 6pm        | `0 18 * * 5`      |"""
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are SchedulerAgent 🗓️, the assistant for managing scheduled tasks in the Home Assistant system.
+You are SchedulerAgent, the assistant for Amira's scheduled tasks.
 
-Scheduled tasks automatically send a **message** to the main AI agent on a cron schedule.
-The message is processed exactly as if the user had typed it: weather summaries, device reports, reminders, etc.
+A scheduled task sends a **message** to Amira's main AI on a cron schedule; the
+message is handled as if the user had typed it (weather summaries, device
+reports, reminders…). The reply lands in the chat session `cron_<task_id>`.
 
-## What you can do
-- **Create** a task: you need a name, a schedule (cron or natural language) and a message
-- **List** all tasks with status, next run and run count
-- **Delete** a task (built-in system tasks cannot be deleted)
-- **Enable / disable** an existing task
+Manage tasks only through Amira's scheduler REST API (see "Amira scheduled
+tasks" above): list, create, delete, enable/disable. Built-in system tasks
+(builtin=true) cannot be deleted.
 
 ## Cron syntax (5 fields: minute hour day month weekday)
 {cron_table}
 
-When the user describes a time in natural language, convert it to cron without asking for confirmation.
-When creating a task always call the `create_task` tool, then show a brief summary.
-**cron** and **message** are always in English in the tool parameters — never translate them.
+Convert natural-language times to cron without asking for confirmation.
+After creating a task, show its id, cron and next run. Keep **cron** and
+**message** in English in the API call.
 {respond_instruction}
 """
+
+_SESSIONS_FILE = "/config/amira/scheduler_sessions.json"
+_lock = threading.Lock()
 
 
 def _get_system_prompt() -> str:
@@ -69,317 +69,89 @@ def _get_system_prompt() -> str:
         respond_instruction=respond,
     )
 
-# ── Tool definitions (Anthropic messages API format) ──────────────────────────
-# Always in English — these are instructions to Claude, not shown to the user.
 
-_TOOLS = [
-    {
-        "name": "create_task",
-        "description": (
-            "Create and save a new scheduled task. "
-            "Call this when the user wants to create a schedule."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Task name (e.g. 'Morning briefing')",
-                },
-                "cron": {
-                    "type": "string",
-                    "description": "5-field cron expression, e.g. '0 9 * * 1-5'",
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Message to send to the main AI agent when the task fires",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Optional human-readable description of the task",
-                },
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Whether to activate the task immediately (default: true)",
-                },
-            },
-            "required": ["name", "cron", "message"],
-        },
-    },
-    {
-        "name": "list_tasks",
-        "description": "Return the list of all scheduled tasks with their current status.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "delete_task",
-        "description": (
-            "Delete a scheduled task. "
-            "Built-in system tasks (e.g. memory_trim) cannot be deleted."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task_id": {
-                    "type": "string",
-                    "description": "Task ID to delete (visible in list_tasks output)",
-                },
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "toggle_task",
-        "description": "Enable or disable a scheduled task.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Task ID"},
-                "enabled": {
-                    "type": "boolean",
-                    "description": "True = enable, False = disable",
-                },
-            },
-            "required": ["task_id", "enabled"],
-        },
-    },
-]
+# ── Session storage (text history, persisted) ──────────────────────────────────
+# session_id -> [{"role": "user"|"assistant", "content": str}, ...]
 
-# ── In-memory session storage ──────────────────────────────────────────────────
-# session_id -> list of message dicts (anthropic messages format)
-_sessions: dict = {}
+def _load_sessions() -> dict:
+    try:
+        with open(_SESSIONS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_sessions(sessions: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_SESSIONS_FILE), exist_ok=True)
+        tmp = _SESSIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sessions, f, ensure_ascii=False)
+        os.replace(tmp, _SESSIONS_FILE)
+    except OSError as e:
+        logger.warning(f"SchedulerAgent: could not save sessions: {e}")
 
 
 def clear_session(session_id: str) -> None:
-    """Cancella la cronologia di una sessione."""
-    _sessions.pop(session_id, None)
+    """Delete a session's history and its Claude Code session."""
+    with _lock:
+        sessions = _load_sessions()
+        sessions.pop(session_id, None)
+        _save_sessions(sessions)
+    try:
+        from providers.claude_code import forget_cli_session
+        forget_cli_session(f"scheduler_{session_id}")
+    except Exception:
+        pass
 
 
 def get_session_history(session_id: str) -> list:
-    """Restituisce la cronologia messaggi di una sessione (copia)."""
-    return list(_sessions.get(session_id, []))
+    """Return the message history of a session (copy)."""
+    with _lock:
+        return list(_load_sessions().get(session_id, []))
 
 
 def list_sessions() -> list:
-    """Restituisce tutti i session_id attivi."""
-    return list(_sessions.keys())
-
-
-# ── Tool implementations ───────────────────────────────────────────────────────
-
-def _exec_tool(name: str, inputs: dict) -> str:
-    """Esegue un tool e restituisce il risultato come stringa JSON."""
-    try:
-        import scheduled_tasks as st
-        scheduler = st.get_scheduler()
-    except Exception as e:
-        return json.dumps({"error": tr(
-            "scheduler_unavailable_detail",
-            "Scheduler unavailable: {error}",
-            error=e,
-        )}, ensure_ascii=False)
-
-    if name == "list_tasks":
-        tasks = [
-            {
-                "task_id": t.task_id,
-                "name": t.name,
-                "cron": t.cron_expression,
-                "description": t.description,
-                "enabled": t.enabled,
-                "run_count": t.run_count,
-                "last_run": t.last_run,
-                "next_run": t.next_run,
-                "builtin": getattr(t, "builtin", False),
-                "message": getattr(t, "message", ""),
-            }
-            for t in scheduler.tasks.values()
-        ]
-        return json.dumps({"tasks": tasks, "count": len(tasks)}, ensure_ascii=False)
-
-    if name == "create_task":
-        task_id = f"task_{uuid.uuid4().hex[:8]}"
-        try:
-            task = scheduler.add_message_task(
-                task_id=task_id,
-                name=inputs["name"],
-                cron_expression=inputs["cron"],
-                message=inputs["message"],
-                description=inputs.get("description", ""),
-                enabled=inputs.get("enabled", True),
-            )
-            return json.dumps(
-                {
-                    "ok": True,
-                    "task_id": task.task_id,
-                    "name": task.name,
-                    "cron": task.cron_expression,
-                    "next_run": task.next_run,
-                },
-                ensure_ascii=False,
-            )
-        except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-    if name == "delete_task":
-        task_id = inputs.get("task_id", "")
-        t = scheduler.tasks.get(task_id)
-        if not t:
-            return json.dumps({"error": tr(
-                "scheduler_task_not_found",
-                "Task '{task_id}' not found",
-                task_id=task_id,
-            )}, ensure_ascii=False)
-        if getattr(t, "builtin", False):
-            return json.dumps(
-                {"error": tr(
-                    "scheduler_task_system_delete_forbidden",
-                    "Task '{task_id}' is a system task and cannot be deleted",
-                    task_id=task_id,
-                )},
-                ensure_ascii=False,
-            )
-        ok = scheduler.remove_task(task_id)
-        return json.dumps({"ok": ok, "task_id": task_id}, ensure_ascii=False)
-
-    if name == "toggle_task":
-        task_id = inputs.get("task_id", "")
-        if task_id not in scheduler.tasks:
-            return json.dumps({"error": tr(
-                "scheduler_task_not_found",
-                "Task '{task_id}' not found",
-                task_id=task_id,
-            )}, ensure_ascii=False)
-        scheduler.tasks[task_id].enabled = inputs["enabled"]
-        scheduler.save_tasks()
-        return json.dumps(
-            {"ok": True, "task_id": task_id, "enabled": inputs["enabled"]},
-            ensure_ascii=False,
-        )
-
-    return json.dumps({"error": tr("tool_unknown", "Unknown tool '{name}'", name=name)}, ensure_ascii=False)
-
-
-# ── LLM helpers ────────────────────────────────────────────────────────────────
-
-def _get_anthropic_client():
-    """
-    Restituisce (client, model) con il client Anthropic.
-    Lancia RuntimeError se il pacchetto o la chiave non sono disponibili.
-    """
-    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY non configurata — SchedulerAgent richiede Anthropic Claude."
-        )
-    try:
-        import anthropic as _ant
-    except ImportError:
-        raise RuntimeError(
-            "Pacchetto 'anthropic' non installato (pip install anthropic)."
-        )
-    # Usa un modello leggero/veloce; sovra-scrivibile via env
-    model = os.getenv("SCHEDULER_AGENT_MODEL", "claude-3-5-haiku-20241022")
-    return _ant.Anthropic(api_key=api_key), model
-
-
-def _content_to_dicts(content) -> list:
-    """
-    Converte i ContentBlock Anthropic SDK (oggetti Pydantic) in dizionari plain,
-    pronti per essere serializzati e rimandati nelle messages successive.
-    """
-    result = []
-    for block in content:
-        if hasattr(block, "type"):
-            if block.type == "text":
-                result.append({"type": "text", "text": block.text})
-            elif block.type == "tool_use":
-                result.append(
-                    {
-                        "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    }
-                )
-        elif isinstance(block, dict):
-            result.append(block)
-    return result
+    """Return all session ids."""
+    with _lock:
+        return list(_load_sessions().keys())
 
 
 # ── Public chat interface ──────────────────────────────────────────────────────
 
 def chat(user_message: str, session_id: str = "default") -> str:
-    """
-    Processa un messaggio utente e restituisce la risposta dell'agente.
+    """Process one user message through Claude Code and return the reply text."""
+    from providers.claude_code import ClaudeCodeProvider, native_tools_enabled
+    if not native_tools_enabled():
+        return tr(
+            "scheduler_needs_native",
+            "SchedulerAgent needs Claude Code native mode (CLAUDE_CODE_NATIVE_TOOLS=true).",
+        )
 
-    Args:
-        user_message: testo dell'utente
-        session_id:   identificativo sessione (mantiene la cronologia)
+    with _lock:
+        history = list(_load_sessions().get(session_id, []))
 
-    Returns:
-        Risposta testuale dell'agente (stringa).
-    """
-    try:
-        client, model = _get_anthropic_client()
-    except RuntimeError as e:
-        return str(e)
-
-    # Costruisce la lista messaggi di questa sessione
-    messages = list(_sessions.get(session_id, []))
-    messages.append({"role": "user", "content": user_message})
-
-    # Agentic loop — max 6 round-trip per evitare loop infiniti
-    for iteration in range(6):
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                system=_get_system_prompt(),
-                tools=_TOOLS,
-                messages=messages,
-            )
-        except Exception as e:
-            logger.error(f"SchedulerAgent LLM call failed (iteration {iteration}): {e}")
-            return tr("scheduler_llm_call_error", "LLM call error: {error}", error=e)
-
-        content_dicts = _content_to_dicts(response.content)
-
-        if response.stop_reason == "end_turn":
-            # Risposta testuale finale
-            text = " ".join(
-                b["text"] for b in content_dicts if b.get("type") == "text"
-            ).strip()
-            messages.append({"role": "assistant", "content": content_dicts})
-            _sessions[session_id] = messages
-            return text or tr("scheduler_no_response", "(no response)")
-
-        if response.stop_reason == "tool_use":
-            # Esegui i tool richiesti e continua il loop
-            messages.append({"role": "assistant", "content": content_dicts})
-            tool_results = []
-            for block in content_dicts:
-                if block.get("type") == "tool_use":
-                    result_str = _exec_tool(block["name"], block.get("input", {}))
-                    logger.debug(
-                        f"SchedulerAgent tool '{block['name']}' -> {result_str[:120]}"
-                    )
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block["id"],
-                            "content": result_str,
-                        }
-                    )
-            messages.append({"role": "user", "content": tool_results})
-            continue  # torna al prossimo LLM call
-
-        # stop_reason inatteso (es. "max_tokens")
-        logger.warning(f"SchedulerAgent: unexpected stop_reason '{response.stop_reason}'")
-        break
-
-    _sessions[session_id] = messages
-    return tr(
-        "scheduler_iteration_limit",
-        "Iteration limit reached — try again with a simpler request.",
+    provider = ClaudeCodeProvider(model=os.getenv("SCHEDULER_AGENT_MODEL", "") or "sonnet")
+    messages = (
+        [{"role": "system", "content": _get_system_prompt()}]
+        + history
+        + [{"role": "user", "content": user_message}]
     )
+    parts = []
+    for evt in provider.stream_chat(messages, {"session_id": f"scheduler_{session_id}", "intent": "scheduler"}):
+        if evt.get("type") == "text":
+            parts.append(evt.get("text", ""))
+        elif evt.get("type") == "error":
+            logger.error(f"SchedulerAgent: {evt.get('message')}")
+            return tr("scheduler_llm_call_error", "LLM call error: {error}", error=evt.get("message", ""))
+    reply = "".join(parts).strip() or tr("scheduler_no_response", "(no response)")
+
+    with _lock:
+        sessions = _load_sessions()
+        sessions[session_id] = history + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": reply},
+        ]
+        _save_sessions(sessions)
+    return reply

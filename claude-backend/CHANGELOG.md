@@ -2,6 +2,24 @@
 
 > **⚠️ After updating, rebuild the add-on** (Settings → Add-ons → Amira → Rebuild) to apply new dependencies.
 
+## 4.8.1-native13 — Agents per chat, per-agent memory, scheduler through Claude Code
+
+### Agents
+- **Each chat keeps its agent.** The chat sends the selected agent; the backend remembers it per chat (`/config/amira/session_agents.json`) and the UI restores it when you open the chat. A turn uses that agent's name, instructions and (same provider) model without changing the global agent. The browser no longer pushes a stale stored agent back to the server every 10 s.
+- **Per-agent memory.** In native mode each agent gets its own Claude Code auto-memory folder, `/data/claude/agent-memory/<agent_id>/` (`--settings autoMemoryDirectory`), seeded once from the shared memory.
+- **Channel bots no longer switch the global agent.** Telegram/WhatsApp/Discord turns run as their channel agent for that thread only; nothing is written to `active_agent.txt`. Provider globals are swapped (not persisted) only when the channel agent uses another provider.
+
+### Scheduler
+- **The scheduler actually starts.** Its start-up (with agents, catalog, caches, voice) lived only in `api.py`'s `__main__` block, which never runs because the add-on starts `server.py`; it is now `init_background_services()`, called by `server.py`.
+- **Scheduled messages run in-process through Claude Code** and their replies are saved in chat `cron_<task_id>`. Before, they posted to port 7766 (the API is on 5010), without the API token, with a 60 s timeout, and a failure still counted as a successful run.
+- **SchedulerAgent runs through Claude Code** (OAuth subscription) instead of the Anthropic API with `ANTHROPIC_API_KEY` and `claude-3-5-haiku-20241022`; it manages tasks with Amira's scheduler REST API. Sessions persist in `/config/amira/scheduler_sessions.json`.
+- The native chat prompt documents the scheduler REST API, so "create a task that every morning…" in chat creates a real Amira task.
+
+### MCP
+- `mcp.py` renamed to `amira_mcp.py`: with `/app` first on `sys.path` it shadowed the official `mcp` SDK it imports, so the SDK client never ran (`_MCP_SDK_AVAILABLE=False`) and the start-up package check reported `mcp` falsely.
+
+---
+
 ## 4.8.1-native12 — Claude Code skills in the "/" menu
 
 - **"/" lists Claude Code skills and plugin skills** (from the CLI inventory) next to Amira's skills; the menu scrolls. A second, duplicate autocomplete on the same input was removed.

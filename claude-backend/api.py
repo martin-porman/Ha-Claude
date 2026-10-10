@@ -69,7 +69,8 @@ except ImportError:
     RAG_AVAILABLE = False
 
 try:
-    import mcp
+    # Named amira_mcp so it does not shadow the official `mcp` SDK it imports.
+    import amira_mcp as mcp
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
@@ -1889,70 +1890,44 @@ from contextlib import contextmanager
 
 @contextmanager
 def _apply_channel_agent(channel: str):
-    """Context manager: temporarily activate the agent assigned to *channel*.
+    """Context manager: run the block as the agent assigned to *channel*.
 
-    If the channel has a dedicated agent (configured via /api/agents/channels),
-    the global AI_PROVIDER / AI_MODEL / ai_client are switched to that agent's
-    model for the duration of the block and restored afterwards.
-    If no channel agent is configured, this is a no-op.
+    The agent is set for this thread only (services.turn_context), so a
+    Telegram/WhatsApp/Discord turn never changes the agent of web chats running
+    at the same time, and nothing is written to active_agent.txt. Only when the
+    channel agent uses a different provider are the provider globals swapped
+    for the duration of the block (not persisted).
     """
     global AI_PROVIDER, AI_MODEL, SELECTED_PROVIDER, SELECTED_MODEL, ai_client
 
-    if not AGENT_CONFIG_AVAILABLE:
+    agent = None
+    if AGENT_CONFIG_AVAILABLE:
+        try:
+            mgr = agent_config.get_agent_manager()
+            agent_id = mgr.get_channel_agent(channel)
+            agent = mgr.resolve_agent(agent_id) if agent_id else None
+        except Exception as e:
+            logger.warning(f"_apply_channel_agent('{channel}') error: {e}")
+    if not agent:
         yield
         return
 
-    _entered = False
+    from services import turn_context
+    ref = agent.model_config.primary
+    swap = bool(ref and ref.provider and ref.provider != AI_PROVIDER)
+    saved_globals = (AI_PROVIDER, AI_MODEL, SELECTED_PROVIDER, SELECTED_MODEL, ai_client)
+    logger.info(f"Channel '{channel}' → agent '{agent.id}'" + (f" ({ref.provider}/{ref.model})" if ref else ""))
+    turn_context.set_agent(agent.id)
     try:
-        mgr = agent_config.get_agent_manager()
-        agent_id = mgr.get_channel_agent(channel)
-        if not agent_id:
-            _entered = True
-            yield
-            return
-
-        agent = mgr.resolve_agent(agent_id)
-        if not agent or not agent.model_config.primary:
-            _entered = True
-            yield
-            return
-
-        ref = agent.model_config.primary
-        # Save current state (including agent globals)
-        prev_active = mgr.get_active_agent()
-        prev_active_id = prev_active.id if prev_active else None
-        saved_globals = (AI_PROVIDER, AI_MODEL, SELECTED_PROVIDER, SELECTED_MODEL, ai_client)
-
-        # Switch to channel agent
-        mgr.set_active_agent(agent_id)
-        _sync_active_agent_globals()   # update AGENT_SYSTEM_PROMPT_OVERRIDE etc.
-
-        if ref.provider != AI_PROVIDER or ref.model != AI_MODEL:
-            AI_PROVIDER = ref.provider
-            AI_MODEL = ref.model
-            SELECTED_PROVIDER = ref.provider
-            SELECTED_MODEL = ref.model
+        if swap:
+            AI_PROVIDER, AI_MODEL = ref.provider, ref.model
+            SELECTED_PROVIDER, SELECTED_MODEL = ref.provider, ref.model
             initialize_ai_client()
-
-        logger.info(f"Channel '{channel}' → agent '{agent_id}' ({ref.provider}/{ref.model})")
-
-        _entered = True
-        try:
-            yield
-        finally:
-            # Restore previous provider state
-            AI_PROVIDER, AI_MODEL, SELECTED_PROVIDER, SELECTED_MODEL, ai_client = saved_globals
-            if prev_active_id:
-                mgr.set_active_agent(prev_active_id)
-                _sync_active_agent_globals()   # restore AGENT_SYSTEM_PROMPT_OVERRIDE
-            else:
-                initialize_ai_client()
-    except Exception as e:
-        if _entered:
-            raise   # the chat body failed; a second yield would mask it with a RuntimeError
-        logger.warning(f"_apply_channel_agent('{channel}') error: {e}")
         yield
-
+    finally:
+        turn_context.set_agent(None)
+        if swap:
+            AI_PROVIDER, AI_MODEL, SELECTED_PROVIDER, SELECTED_MODEL, ai_client = saved_globals
 
 ai_client = None
 # Prefer persisted selection (set by /api/set_model) over add-on configuration
@@ -3767,7 +3742,50 @@ def _claude_code_native() -> bool:
     return native_tools_enabled()
 
 
-def stream_chat_with_ai(user_message: str, session_id: str = "default", image_data: str = None, read_only: bool = False, voice_mode: bool = False, req_language: str = None):
+SESSION_AGENTS_FILE = "/config/amira/session_agents.json"   # chat session id → agent id
+
+
+def _load_session_agents() -> dict:
+    try:
+        with open(SESSION_AGENTS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+session_agents: dict = _load_session_agents()
+_session_agents_lock = threading.Lock()
+
+
+def _resolve_turn_agent(session_id: str, requested_agent_id: str = None):
+    """Agent for this turn: requested by the UI > channel bot (this thread) >
+    the agent this chat used before > the global active agent. Remembered per chat."""
+    if not AGENT_CONFIG_AVAILABLE:
+        return None
+    try:
+        from services import turn_context
+        mgr = agent_config.get_agent_manager()
+        agent = None
+        for aid in (requested_agent_id, turn_context.current_agent(), session_agents.get(session_id)):
+            agent = mgr.resolve_agent(aid) if aid else None
+            if agent:
+                break
+        agent = agent or mgr.get_active_agent()
+        if agent and session_agents.get(session_id) != agent.id:
+            with _session_agents_lock:
+                session_agents[session_id] = agent.id
+                tmp = SESSION_AGENTS_FILE + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(session_agents, f)
+                os.replace(tmp, SESSION_AGENTS_FILE)
+        return agent
+    except Exception as e:
+        logger.warning(f"Turn agent resolution failed: {e}")
+        return None
+
+
+def stream_chat_with_ai(user_message: str, session_id: str = "default", image_data: str = None, read_only: bool = False, voice_mode: bool = False, req_language: str = None, agent_id: str = None):
     """Stream chat events for all providers with optional image support. Yields SSE event dicts.
     Uses LOCAL intent detection + smart context to minimize tokens sent to AI API."""
     global current_session_id
@@ -3800,6 +3818,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
     # Store read-only state for this session (accessible by execute_tool)
     read_only_sessions[session_id] = read_only
     current_session_id = session_id
+    _turn_model = get_active_model()   # replaced by the turn agent's model below, if it has one
 
     if session_id not in conversations:
         conversations[session_id] = []
@@ -4363,12 +4382,27 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
 
         # Pass session_id to providers so they can maintain native conversation state
         # (e.g. claude_web reuses the same claude.ai conversation across turns).
+        # The agent answering this turn (per chat; not necessarily the global one).
+        _turn_agent = _resolve_turn_agent(session_id, agent_id)
+        _turn_model = get_active_model()
+        if _turn_agent is not None:
+            _global_agent = agent_config.get_agent_manager().get_active_agent()
+            _ref = _turn_agent.model_config.primary
+            # The global agent follows the model dropdown; another agent uses its own
+            # model when it is on the same provider.
+            if (not _global_agent or _global_agent.id != _turn_agent.id) and _ref and _ref.provider == AI_PROVIDER:
+                _turn_model = _ref.model
         if intent_info is not None:
             intent_info["session_id"] = session_id
-            # claude_code builds its own CLI system prompt; give it the agent persona
-            # and custom prompt that get_system_prompt() adds for the other providers.
-            intent_info["agent_name"] = AGENT_NAME
-            intent_info["agent_instructions"] = AGENT_INSTRUCTIONS
+            # claude_code builds its own CLI system prompt; give it the agent persona,
+            # memory scope and custom prompt that get_system_prompt() adds elsewhere.
+            if _turn_agent is not None:
+                intent_info["agent_id"] = _turn_agent.id
+                intent_info["agent_name"] = (_turn_agent.identity.name or _turn_agent.name or _turn_agent.id)
+                intent_info["agent_instructions"] = (_turn_agent.instructions or "").strip()
+            else:
+                intent_info["agent_name"] = AGENT_NAME
+                intent_info["agent_instructions"] = AGENT_INSTRUCTIONS
             intent_info["custom_system_prompt"] = CUSTOM_SYSTEM_PROMPT or ""
 
         # Tool execution loop: providers surface tool_calls in the done event;
@@ -4514,7 +4548,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
             # Model Fallback: if enabled, wrap the call through the fallback engine
             # which tries the primary model first, then agent/global fallbacks on error.
             _active_provider = AI_PROVIDER
-            _active_model = get_active_model()
+            _active_model = _turn_model
 
             if MODEL_FALLBACK_AVAILABLE and AGENT_CONFIG_AVAILABLE:
                 try:
@@ -4573,13 +4607,13 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                     provider_gen = provider_stream_chat(
                         AI_PROVIDER, messages,
                         intent_info=intent_info,
-                        model=get_active_model(),
+                        model=_turn_model,
                     )
             else:
                 provider_gen = provider_stream_chat(
                     AI_PROVIDER, messages,
                     intent_info=intent_info,
-                    model=get_active_model(),
+                    model=_turn_model,
                 )
 
             _pending_tool_calls: list = []
@@ -4600,7 +4634,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
             }
             _is_no_tool_provider = (
                 (AI_PROVIDER in _NO_TOOL_PROVIDERS and not _claude_code_native())
-                or get_active_model().lower() in _NO_NATIVE_TOOL_MODELS
+                or _turn_model.lower() in _NO_NATIVE_TOOL_MODELS
             )
             _text_buffer: list = []
             _mcp_guard_triggered_this_round = False
@@ -4903,7 +4937,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                             output_tokens = norm["output_tokens"]
                             cache_read_tokens = norm["cache_read_tokens"]
                             cache_write_tokens = norm["cache_write_tokens"]
-                            model_name = raw_usage.get("model") or get_active_model()
+                            model_name = raw_usage.get("model") or _turn_model
                             provider_name = raw_usage.get("provider") or AI_PROVIDER
                             # Full cost breakdown (input/output/cache_read/cache_write)
                             cost_bd = pricing.calculate_cost_breakdown(
@@ -5950,7 +5984,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
             _msgs_for_history = _compact_messages_for_history(new_msgs_from_provider)
             for msg in _msgs_for_history:
                 if msg.get("role") == "assistant":
-                    msg["model"] = get_active_model()
+                    msg["model"] = _turn_model
                     msg["provider"] = AI_PROVIDER
                     if last_usage:
                         msg["usage"] = last_usage
@@ -6082,7 +6116,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
             if assembled:
                 # Log the AI response for debugging (truncate to 500 chars)
                 _log_resp = assembled[:500] + ('...' if len(assembled) > 500 else '')
-                logger.chat(f"📤 [{AI_PROVIDER}/{get_active_model()}]: {_log_resp}")
+                logger.chat(f"📤 [{AI_PROVIDER}/{_turn_model}]: {_log_resp}")
                 _pending_summary = _extract_pending_context_from_assistant(assembled)
                 if _pending_summary:
                     session_pending_context[session_id] = {
@@ -6096,7 +6130,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                 assistant_msg: dict = {
                     "role": "assistant",
                     "content": assembled,
-                    "model": get_active_model(),
+                    "model": _turn_model,
                     "provider": AI_PROVIDER,
                 }
                 if last_usage:
@@ -6361,11 +6395,11 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                 or "Preview of the change. Confirm to apply."
             )
             yield {"type": "token", "content": _preview_msg}
-            logger.chat(f"📤 [{AI_PROVIDER}/{get_active_model()}]: {_preview_msg}")
+            logger.chat(f"📤 [{AI_PROVIDER}/{_turn_model}]: {_preview_msg}")
             _assistant_preview_msg = {
                 "role": "assistant",
                 "content": _preview_msg,
-                "model": get_active_model(),
+                "model": _turn_model,
                 "provider": AI_PROVIDER,
             }
             if last_usage:
@@ -6403,7 +6437,7 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                     title=title,
                     messages=conversations[session_id],
                     provider=AI_PROVIDER,
-                    model=get_active_model(),
+                    model=_turn_model,
                     metadata={"intent": intent_name, "read_only": read_only}
                 )
                 logger.info(f"Conversation {session_id} saved to persistent memory")
@@ -7179,16 +7213,11 @@ def initialize_mcp() -> None:
 from routes import register_blueprints
 register_blueprints(app)
 
-if __name__ == "__main__":
-    logger.info(f"Provider: {AI_PROVIDER} | Model: {get_active_model()}")
-    _OAUTH_PROVIDERS = {"openai_codex", "claude_web", "claude_code", "chatgpt_web", "gemini_web", "perplexity_web"}
-    if AI_PROVIDER in _OAUTH_PROVIDERS:
-        logger.info("API Key: OAuth-based (use 🔑 button in UI)")
-    else:
-        logger.info(f"API Key: {'configured' if get_api_key() else 'NOT configured'}")
-    # get_ha_token() è già definita sopra, quindi qui è sicuro
-    logger.info(f"HA Token: {'available' if get_ha_token() else 'NOT available'}")
-    
+def init_background_services() -> None:
+    """Start memory cache, fallback chain, model catalog, agents, caches, image support,
+    the task scheduler and voice. Called by server.main(); the add-on never runs
+    this module as __main__, so these must not live only in the __main__ block."""
+    global AGENT_NAME, AGENT_AVATAR
     # Log memory system status
     if MEMORY_AVAILABLE:
         try:
@@ -7284,15 +7313,12 @@ if __name__ == "__main__":
     if SCHEDULED_TASKS_AVAILABLE:
         try:
             def _scheduled_message_callback(task_id: str, message: str):
-                try:
-                    port = int(os.getenv("PORT", 7766))
-                    requests.post(
-                        f"http://127.0.0.1:{port}/api/chat",
-                        json={"message": message, "session_id": f"cron_{task_id}", "stream": False},
-                        timeout=60,
-                    )
-                except Exception as _e:
-                    logger.warning(f"Scheduled task message delivery failed: {_e}")
+                # Runs in the scheduler thread, in-process, through the active provider
+                # (Claude Code in native mode). The reply is saved in session cron_<task_id>;
+                # raising marks the run as failed in the task history.
+                reply = chat_with_ai(message, f"cron_{task_id}")
+                if not reply or reply.startswith("\u274c"):
+                    raise RuntimeError((reply or "empty reply")[:200])
 
             scheduler = scheduled_tasks.initialize_scheduler(
                 check_interval=60,
@@ -7330,6 +7356,20 @@ if __name__ == "__main__":
             logger.info("🎙 Voice transcription (Whisper) initialized")
         except Exception as e:
             logger.warning(f"Voice transcription initialization: {e}")
+
+
+
+if __name__ == "__main__":
+    logger.info(f"Provider: {AI_PROVIDER} | Model: {get_active_model()}")
+    _OAUTH_PROVIDERS = {"openai_codex", "claude_web", "claude_code", "chatgpt_web", "gemini_web", "perplexity_web"}
+    if AI_PROVIDER in _OAUTH_PROVIDERS:
+        logger.info("API Key: OAuth-based (use 🔑 button in UI)")
+    else:
+        logger.info(f"API Key: {'configured' if get_api_key() else 'NOT configured'}")
+    # get_ha_token() è già definita sopra, quindi qui è sicuro
+    logger.info(f"HA Token: {'available' if get_ha_token() else 'NOT available'}")
+    
+    init_background_services()
 
     # Validate provider/model compatibility
     is_valid, error_msg = validate_model_provider_compatibility()

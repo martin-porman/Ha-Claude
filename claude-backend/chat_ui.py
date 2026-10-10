@@ -8102,7 +8102,8 @@ def get_chat_ui():
                 message: fileCtx ? fileCtx + '\\n\\n' + text : text,
                 session_id: currentSessionId,
                 read_only: readOnlyMode,
-                voice_mode: !!voiceModeActive
+                voice_mode: !!voiceModeActive,
+                agent_id: _selectedAgentId()
             }};
             addMessage(text, 'user');
             if (input) {{ input.value = ''; input.style.height = 'auto'; }}
@@ -8219,7 +8220,8 @@ def get_chat_ui():
                     message: fileCtx ? fileCtx + '\\n\\n' + _baseMsg : _baseMsg,
                     session_id: currentSessionId,
                     read_only: readOnlyMode,
-                    voice_mode: !!voiceModeActive
+                    voice_mode: !!voiceModeActive,
+                    agent_id: _selectedAgentId()
                 }};
                 if (imageToSend) {{
                     payload.image = imageToSend;
@@ -9365,6 +9367,12 @@ def get_chat_ui():
                     return;
                 }}
                 const data = await resp.json();
+                const _agentSel = document.getElementById('agentSelect');
+                if (data.agent_id && _agentSel && _agentSel.value !== data.agent_id
+                    && Array.from(_agentSel.options).some(o => o.value === data.agent_id)) {{
+                    _agentSel.value = data.agent_id;
+                    changeAgent(data.agent_id, true);
+                }}
                 chat.innerHTML = '';
                 resetConversationUsage();
                 if (data.messages && data.messages.length > 0) {{
@@ -9716,9 +9724,8 @@ def get_chat_ui():
                 const agentSel = document.getElementById('agentSelect');
                 if (agentSel && Array.isArray(data.agents) && data.agents.length >= 1) {{
                     agentSel.innerHTML = '';
-                    // Determine target agent: localStorage > explicit change > server active
-                    const storedAgent = localStorage.getItem('ha_claude_active_agent');
-                    const targetAgent = _lastExplicitAgent || storedAgent || data.active_agent;
+                    // Target agent: explicit change in this page > server active
+                    const targetAgent = _lastExplicitAgent || data.active_agent;
                     data.agents.forEach(a => {{
                         const opt = document.createElement('option');
                         opt.value = a.id;
@@ -9729,14 +9736,6 @@ def get_chat_ui():
                         if (targetAgent && a.id === targetAgent) opt.selected = true;
                         agentSel.appendChild(opt);
                     }});
-                    // Sync server active agent if localStorage selection differs
-                    if (storedAgent && storedAgent !== data.active_agent && data.agents.some(a => a.id === storedAgent)) {{
-                        fetch(apiUrl('api/agents/set'), {{
-                            method: 'POST',
-                            headers: {{'Content-Type': 'application/json'}},
-                            body: JSON.stringify({{agent_id: storedAgent}})
-                        }}).catch(() => {{}});
-                    }}
                     agentSel.style.display = '';
                 }} else if (agentSel) {{
                     agentSel.style.display = 'none';
@@ -10014,11 +10013,16 @@ def get_chat_ui():
         // Track last explicitly selected agent (survives loadModels rebuilds)
         let _lastExplicitAgent = null;
 
+        // Agent shown in the selector; sent with each message so the chat keeps its agent.
+        function _selectedAgentId() {{
+            const sel = document.getElementById('agentSelect');
+            return (sel && sel.value) || undefined;
+        }}
+
         // Change active agent
-        async function changeAgent(agentId) {{
+        async function changeAgent(agentId, silent) {{
             if (!agentId) return;
             _lastExplicitAgent = agentId;
-            localStorage.setItem('ha_claude_active_agent', agentId);
             try {{
                 const response = await fetch(apiUrl('api/agents/set'), {{
                     method: 'POST',
@@ -10040,7 +10044,7 @@ def get_chat_ui():
                     }}
                     // Notify user
                     const agentLabel = (identity.emoji || '') + ' ' + (identity.name || agentId);
-                    addMessage('\U0001f916 ' + T.switched_to.replace('{{provider}}', 'Agent').replace('{{model}}', agentLabel.trim()), 'system');
+                    if (!silent) addMessage('\U0001f916 ' + T.switched_to.replace('{{provider}}', 'Agent').replace('{{model}}', agentLabel.trim()), 'system');
                     // Refresh dropdowns (agent may have changed provider/model)
                     await loadModels();
                 }} else {{

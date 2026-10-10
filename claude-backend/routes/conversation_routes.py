@@ -234,7 +234,9 @@ def api_conversation_get(session_id):
                     if m.get("provider"):
                         msg_data["provider"] = m["provider"]
                 display_msgs.append(msg_data)
-        return jsonify({"session_id": session_id, "messages": display_msgs}), 200
+        import api as _api
+        return jsonify({"session_id": session_id, "messages": display_msgs,
+                        "agent_id": _api.session_agents.get(session_id)}), 200
     return jsonify({"error": "Conversation not found"}), 404
 
 
@@ -246,6 +248,13 @@ def api_conversation_delete(session_id):
         import api as _api
         _api.save_conversations()
     session_last_intent.pop(session_id, None)
+    try:
+        import api as _api
+        if _api.session_agents.pop(session_id, None) is not None:
+            with open(_api.SESSION_AGENTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(_api.session_agents, f)
+    except Exception as e:
+        logger.debug(f"Could not drop agent for {session_id}: {e}")
     try:
         from providers.claude_code import forget_cli_session
         forget_cli_session(session_id)
