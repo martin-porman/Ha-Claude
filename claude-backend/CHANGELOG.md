@@ -2,6 +2,15 @@
 
 > **⚠️ After updating, rebuild the add-on** (Settings → Add-ons → Amira → Rebuild) to apply new dependencies.
 
+## 4.8.1-native12 — Claude Code skills in the "/" menu
+
+- **"/" lists Claude Code skills and plugin skills** (from the CLI inventory) next to Amira's skills; the menu scrolls. A second, duplicate autocomplete on the same input was removed.
+- **"/name …" runs the Claude Code skill or plugin command** in native mode: the message reaches the CLI as a slash command (it was prefixed "Human: ") and no "skill not found" status is shown.
+- An active Amira skill keeps the native Home Assistant prompt (it replaced it).
+- Skills tab lists the CLI's MCP servers next to its plugins and subagents.
+
+---
+
 ## 4.8.1-native11 — Claude Code sessions, auto memory, real MCP/skills lists
 
 ### Fixed (native Claude Code mode)

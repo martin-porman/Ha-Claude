@@ -2005,7 +2005,7 @@ def get_chat_ui():
         .voice-speaking-bar .wave span:nth-child(4) {{ height: 16px; animation-delay: 0.3s; }}
         .voice-speaking-bar .wave span:nth-child(5) {{ height: 8px; animation-delay: 0.4s; }}
         @keyframes wave-bar {{ 0%, 100% {{ transform: scaleY(1); }} 50% {{ transform: scaleY(0.4); }} }}
-        .skill-slash-menu {{ display:none; position:absolute; bottom:calc(100% + 4px); left:16px; right:16px; background:var(--card-background-color,#fff); border:1px solid #e0e0e0; border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.12); z-index:1000; overflow:hidden; }}
+        .skill-slash-menu {{ display:none; position:absolute; bottom:calc(100% + 4px); left:16px; right:16px; background:var(--card-background-color,#fff); border:1px solid #e0e0e0; border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.12); z-index:1000; max-height:320px; overflow-y:auto; }}
         .skill-slash-menu.visible {{ display:block; }}
         .skill-slash-item {{ padding:8px 12px; cursor:pointer; display:flex; align-items:center; gap:10px; }}
         .skill-slash-item:hover, .skill-slash-item.active {{ background:#f0f0ff; }}
@@ -3689,15 +3689,24 @@ def get_chat_ui():
         // ---- Skill slash-command autocomplete ----
         (function() {{
           const menu = document.getElementById('skillSlashMenu');
-          let skills = [], activeIdx = -1;
+          let skills = [], ccSkills = [], activeIdx = -1;
           fetch(apiUrl('api/skills')).then(r => r.json()).then(d => {{ skills = (d.skills || []).filter(s => s.installed !== false); }}).catch(() => {{}});
+          // Skills and plugin skills the Claude Code CLI loaded (native mode); refreshed when "/" is typed.
+          function loadCcSkills() {{
+            fetchClaudeCodeInventory().then(inv => {{
+              ccSkills = (inv && inv.native ? (inv.skills || []) : [])
+                .filter(n => !skills.some(s => s.name === n))
+                .map(n => ({{ name: n, description: n.includes(':') ? 'Claude Code plugin' : 'Claude Code' }}));
+            }});
+          }}
+          loadCcSkills();
           function _desc(s) {{
             const d = s.description;
             return (typeof d === 'object' ? d['{ui_lang}'] || d['en'] || Object.values(d)[0] : d) || '';
           }}
           function show(filter) {{
             const q = filter.toLowerCase();
-            const matches = skills.filter(s => s.name.startsWith(q));
+            const matches = skills.concat(ccSkills).filter(s => s.name.toLowerCase().startsWith(q) || s.name.toLowerCase().includes(':' + q));
             if (!matches.length) {{ hide(); return; }}
             activeIdx = -1;
             menu.innerHTML = matches.map(s =>
@@ -3724,6 +3733,7 @@ def get_chat_ui():
           }}
           input.addEventListener('input', function() {{
             const v = this.value;
+            if (v === '/') loadCcSkills();
             if (v.startsWith('/') && !v.includes(' ')) show(v.slice(1));
             else hide();
           }});
@@ -7328,6 +7338,10 @@ def get_chat_ui():
                 if (plugins.length) {{
                     html += '<div style="' + box + '"><b>Plugins:</b> ' + plugins.map(p => _escapeHtml(p.name + (p.version ? ' ' + p.version : ''))).join(', ') + '</div>';
                 }}
+                const mcp = inv.mcp_servers || [];
+                if (mcp.length) {{
+                    html += '<div style="' + box + '"><b>MCP:</b> ' + mcp.map(s => _escapeHtml(s.name) + ' <span style="color:' + (s.status === 'connected' ? '#2e7d32' : '#b26a00') + ';">(' + _escapeHtml(s.status || '') + ')</span>').join(', ') + '</div>';
+                }}
             }} else if (kind === 'mcp') {{
                 const servers = inv.mcp_servers || [];
                 html += servers.length ? servers.map(s => {{
@@ -8552,7 +8566,6 @@ def get_chat_ui():
         }}
 
         // ---- Skills panel ----
-        let _installedSkills = [];
 
         function _semverGt(a, b) {{
             const pa = String(a || '0').split('.').map(Number);
@@ -8602,7 +8615,6 @@ def get_chat_ui():
                 const storeData = storeResp.ok ? await storeResp.json() : {{}};
                 const installed = instData.skills  || [];
                 const store     = storeData.skills || [];
-                _installedSkills = installed;
                 const instNames      = new Set(installed.map(s => s.name));
                 const instVersionMap = new Map(installed.map(s => [s.name, s.version || '0']));
 
@@ -8728,98 +8740,6 @@ def get_chat_ui():
                 alert('❌ ' + e.message);
             }}
         }}
-
-        // ---- Skills autocomplete ----
-        (function() {{
-            const textarea = document.getElementById('input');
-            if (!textarea) return;
-
-            const dropdown = document.createElement('div');
-            dropdown.id = 'skillsAutocomplete';
-            dropdown.style.cssText = 'display:none;position:absolute;bottom:100%;left:0;right:0;background:#fff;border:1px solid #e0e0e0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);z-index:1000;max-height:220px;overflow-y:auto;margin-bottom:4px;';
-            textarea.parentElement.style.position = 'relative';
-            textarea.parentElement.appendChild(dropdown);
-
-            let _acIdx = -1;
-            let _acItems = [];
-
-            function _renderDropdown(matches) {{
-                _acItems = matches;
-                _acIdx = -1;
-                if (!matches.length) {{ dropdown.style.display = 'none'; return; }}
-                dropdown.innerHTML = matches.map((s, i) => {{
-                    const lang = '{ui_lang}';
-                    const desc = (s.description && typeof s.description === 'object')
-                        ? (s.description[lang] || s.description['en'] || '')
-                        : (s.description || '');
-                    return `<div class="skill-ac-item" data-idx="${{i}}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;">
-                        <span style="font-weight:600;color:#667eea;">/${{s.name}}</span>
-                        <span style="font-size:11px;color:#888;margin-left:6px;">${{desc}}</span>
-                    </div>`;
-                }}).join('');
-                dropdown.querySelectorAll('.skill-ac-item').forEach(el => {{
-                    el.addEventListener('mousedown', e => {{
-                        e.preventDefault();
-                        const idx = parseInt(el.dataset.idx);
-                        _applyItem(idx);
-                    }});
-                    el.addEventListener('mouseenter', () => {{
-                        _acIdx = parseInt(el.dataset.idx);
-                        _highlight();
-                    }});
-                }});
-                dropdown.style.display = 'block';
-            }}
-
-            function _highlight() {{
-                dropdown.querySelectorAll('.skill-ac-item').forEach((el, i) => {{
-                    el.style.background = i === _acIdx ? '#f0f4ff' : '';
-                }});
-            }}
-
-            function _applyItem(idx) {{
-                if (idx < 0 || idx >= _acItems.length) return;
-                textarea.value = '/' + _acItems[idx].name + ' ';
-                dropdown.style.display = 'none';
-                textarea.focus();
-                // Move cursor to end
-                textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
-            }}
-
-            textarea.addEventListener('input', function() {{
-                const val = textarea.value;
-                if (!val.startsWith('/') || val.includes(' ')) {{ dropdown.style.display = 'none'; return; }}
-                const partial = val.slice(1).toLowerCase();
-                const matches = _installedSkills.filter(s => s.name.startsWith(partial));
-                _renderDropdown(matches);
-            }});
-
-            textarea.addEventListener('keydown', function(e) {{
-                if (dropdown.style.display === 'none') return;
-                if (e.key === 'ArrowDown') {{
-                    e.preventDefault();
-                    _acIdx = Math.min(_acIdx + 1, _acItems.length - 1);
-                    _highlight();
-                }} else if (e.key === 'ArrowUp') {{
-                    e.preventDefault();
-                    _acIdx = Math.max(_acIdx - 1, 0);
-                    _highlight();
-                }} else if (e.key === 'Tab' || (e.key === 'Enter' && _acIdx >= 0)) {{
-                    if (_acIdx >= 0) {{
-                        e.preventDefault();
-                        _applyItem(_acIdx);
-                    }}
-                }} else if (e.key === 'Escape') {{
-                    dropdown.style.display = 'none';
-                }}
-            }});
-
-            document.addEventListener('click', function(e) {{
-                if (!dropdown.contains(e.target) && e.target !== textarea) {{
-                    dropdown.style.display = 'none';
-                }}
-            }});
-        }})();
 
         async function loadCostsPanel() {{
             const panel = document.getElementById('costsPanel');

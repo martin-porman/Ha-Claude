@@ -463,7 +463,8 @@ class ClaudeCodeProvider(EnhancedProvider):
             )
         else:
             intent_base_prompt = (intent_info or {}).get("prompt", "")
-            if (intent_info or {}).get("active_skill"):
+            active_skill = (intent_info or {}).get("active_skill")
+            if active_skill and not native_tools_enabled():
                 head = intent_base_prompt or ""
             elif native_tools_enabled():
                 head = (
@@ -486,7 +487,8 @@ class ClaudeCodeProvider(EnhancedProvider):
                 )
                 # The auto/chat intent prompts are guides to Amira's own tool layer
                 # (call_service, preview_automation_change…), which the CLI does not have.
-                if intent_base_prompt and intent_name not in ("auto", "chat"):
+                # An active Amira skill (its body is in the intent prompt) is kept on top.
+                if intent_base_prompt and (active_skill or intent_name not in ("auto", "chat")):
                     head = intent_base_prompt + "\n\n" + head
                 custom = str((intent_info or {}).get("custom_system_prompt") or "").strip()
                 if custom:
@@ -547,8 +549,9 @@ class ClaudeCodeProvider(EnhancedProvider):
                 f"\n\n[⚠️ SKILL ACTIVE: {active_skill} — ONLY output `type: custom:{active_skill}` "
                 f"cards — ALWAYS wrap YAML in ```yaml fences]"
             )
-        # A prompt starting with "/" is parsed by the CLI as a slash command.
-        if prompt.lstrip().startswith("/"):
+        # A prompt starting with "/" is parsed by the CLI as a slash command: wanted in
+        # native mode (Claude Code skills and plugin commands), blocked otherwise.
+        if prompt.lstrip().startswith("/") and not native_tools_enabled():
             prompt = "Human: " + prompt
         return prompt
 

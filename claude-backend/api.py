@@ -4029,7 +4029,9 @@ def stream_chat_with_ai(user_message: str, session_id: str = "default", image_da
                 logger.info(f"Skill '{_skill_name}' injected into system prompt")
             else:
                 session_active_skill.pop(session_id, None)
-                yield {"type": "status", "message": tr("skill_not_found").format(name=_skill_name)}
+                # Native Claude Code runs its own skills and plugin commands from "/name".
+                if not _claude_code_native():
+                    yield {"type": "status", "message": tr("skill_not_found").format(name=_skill_name)}
         elif session_id in session_active_skill:
             # Follow-up message — re-inject the active skill silently
             _active_skill = session_active_skill[session_id]

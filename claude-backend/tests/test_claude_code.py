@@ -503,3 +503,17 @@ def test_forget_cli_session(native, tmp_path):
     assert cc.get_cli_session("s5") == _SESSION
     cc.forget_cli_session("s5")
     assert cc.get_cli_session("s5") == ""
+
+
+def test_native_slash_command_reaches_cli_unprefixed(native):
+    _run(messages=[{"role": "user", "content": "/ha-config-editing check packages"}],
+         intent_info={"session_id": "s6", "intent": "chat"})
+    assert native.dump()["stdin"] == "/ha-config-editing check packages"
+
+
+def test_native_active_amira_skill_keeps_native_head(native):
+    _run(intent_info={"session_id": "s7", "intent": "chat", "active_skill": "mushroom",
+                      "prompt": "SKILL INSTRUCTIONS (mushroom): cards"})
+    argv = native.dump()["argv"]
+    sp = argv[argv.index("--append-system-prompt") + 1]
+    assert "SKILL INSTRUCTIONS (mushroom)" in sp and "Home Assistant add-on called Amira" in sp
