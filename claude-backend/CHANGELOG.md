@@ -22,6 +22,8 @@
 ### UI
 - The agent editor hides "Allowed tools" for native Claude Code agents and says why.
 - Skill store: the upstream index (`Bobsilvio/ha-claude`) is gone (HTTP 404); the panel now says so instead of "check your internet connection".
+- "New chat" greets with the agent currently selected (it used the agent from page load).
+- Model picker shows "Claude Code: Sonnet 5.5" / "Haiku 5.5" instead of raw IDs.
 
 ---
 

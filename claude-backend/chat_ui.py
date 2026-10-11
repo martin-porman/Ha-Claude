@@ -9481,8 +9481,12 @@ def get_chat_ui():
             // Hide skill active banner — new session has no active skill
             const _skillBanner = document.getElementById('skillActiveBanner');
             if (_skillBanner) _skillBanner.style.display = 'none';
+            // The welcome text carries the agent name from page load; use the
+            // agent currently shown in the header (it changes per chat).
+            const _hdrName = (document.querySelector('.header h1') || {{}}).textContent || {json.dumps(agent_name)};
+            const _welcome = `{msgs['welcome']}`.split({json.dumps(agent_name)}).join(_hdrName);
             chat.innerHTML = `<div class="message system">
-                {msgs['welcome']}<br>
+                ${{_welcome}}<br>
                 ${{getProviderModelLine()}}<br>
                 {msgs['capabilities']}<br>
                 {msgs['vision_feature']}

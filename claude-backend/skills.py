@@ -206,7 +206,7 @@ def fetch_store_index(installed_names: Optional[set] = None) -> list[dict]:
                 if status == 404:
                     msg = (f"Skill store index not found (HTTP 404) at {SKILLS_INDEX_URL}. "
                            "The store is unavailable; install skills manually into "
-                           f"{SKILLS_DIR}/<name>/SKILL.md.")
+                           f"{SKILLS_DIR}/SKILL_NAME/SKILL.md.")
                 elif status:
                     msg = f"Skill store unavailable (HTTP {status}) at {SKILLS_INDEX_URL}."
                 else:
