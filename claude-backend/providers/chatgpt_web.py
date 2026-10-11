@@ -338,6 +338,16 @@ class ChatGPTWebProvider(EnhancedProvider):
         # Normalise tool-call history → plain user/assistant messages
         from providers.tool_simulator import flatten_tool_messages
         messages = flatten_tool_messages(messages)
+        # After a tool round the last turn is the assistant holding the [TOOL RESULT]
+        # blocks: end with a continuation user turn (same as github_copilot).
+        if messages and messages[-1].get("role") == "assistant":
+            messages = list(messages) + [{
+                "role": "user",
+                "content": (
+                    "Continue. Use the tool results above to provide "
+                    "the final answer to the user's original request."
+                ),
+            }]
 
         # Build ChatGPT-style messages
         cgpt_messages = []
@@ -355,11 +365,12 @@ class ChatGPTWebProvider(EnhancedProvider):
             })
 
         # Inject system prompt into first user message if present
-        system_text = next(
-            (c if isinstance(c, str) else (c[0].get("text", "") if c else "")
-             for m in messages if m.get("role") == "system"
-             for c in [m.get("content", "")]),
-            ""
+        system_text = "\n\n".join(
+            t for t in (
+                c if isinstance(c, str) else (c[0].get("text", "") if c else "")
+                for m in messages if m.get("role") == "system"
+                for c in [m.get("content", "")]
+            ) if t
         )
 
         # ── Inject intent-specific instructions (no tool support in this provider) ──

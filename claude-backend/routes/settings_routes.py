@@ -464,7 +464,7 @@ def api_settings_get():
             "id": "advanced", "icon": "\u2699\uFE0F", "fields": [
                 {"key": "timeout", "type": "number", "min": 5, "max": 300, "step": 5},
                 {"key": "max_retries", "type": "number", "min": 0, "max": 10, "step": 1},
-                {"key": "max_conversations", "type": "number", "min": 1, "max": 100, "step": 1},
+                {"key": "max_conversations", "type": "number", "min": 1, "max": 5000, "step": 1},
                 {"key": "max_snapshots_per_file", "type": "number", "min": 1, "max": 50, "step": 1},
             ],
         },

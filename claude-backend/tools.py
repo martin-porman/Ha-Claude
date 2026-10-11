@@ -2622,12 +2622,11 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     # Detect the filesystem root from the server config.
                     # tool_name = mcp_<server_name>_<original_tool_name>
                     # Match server by finding which server name is a prefix of the tool suffix.
-                    _srv_obj = None
+                    # Longest name wins, so "foo_bar" beats "foo" for mcp_foo_bar_read.
                     _suffix = tool_name[len("mcp_"):]
-                    for _sn, _s in (manager.servers or {}).items():
-                        if _suffix.startswith(_sn + "_") or _suffix == _sn:
-                            _srv_obj = _s
-                            break
+                    _matches = [_sn for _sn in (manager.servers or {})
+                                if _suffix.startswith(_sn + "_") or _suffix == _sn]
+                    _srv_obj = manager.servers[max(_matches, key=len)] if _matches else None
                     if _srv_obj:
                         _srv_args = _srv_obj.config.get("args", [])
                         _fs_root = next(

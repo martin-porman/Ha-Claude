@@ -332,6 +332,27 @@ class ClaudeWebProvider(EnhancedProvider):
         # Normalise tool-call history → plain user/assistant messages
         from providers.tool_simulator import flatten_tool_messages
         messages = flatten_tool_messages(messages)
+        # After a tool round the last turn is the assistant holding the [TOOL RESULT]
+        # blocks: keep them and end with a continuation user turn (same as github_copilot).
+        _tool_round = ""
+        if messages and messages[-1].get("role") == "assistant":
+            # Tool results of every assistant turn after the last user turn
+            _results = []
+            for _m in reversed(messages):
+                if _m.get("role") != "assistant":
+                    break
+                _c = _m.get("content") or ""
+                _idx = _c.find("[TOOL RESULT")
+                if _idx >= 0:
+                    _results.insert(0, _c[_idx:])
+            _tool_round = "\n\n".join(_results)
+            messages = list(messages) + [{
+                "role": "user",
+                "content": (
+                    "Continue. Use the tool results above to provide "
+                    "the final answer to the user's original request."
+                ),
+            }]
 
         # Build Claude.ai style message list
         system_prompt, human_messages = self._split_messages(messages)
@@ -452,7 +473,9 @@ class ClaudeWebProvider(EnhancedProvider):
 
         # When reusing: history is on claude.ai → just the new message.
         # When fresh: reconstruct the full history block.
-        prompt_text = last_human if _cached_conv_uuid else _build_full_history_prompt()
+        # After a tool round the reused conv lacks the tool results: send them first.
+        _reuse_prompt = f"{_tool_round}\n\n{last_human}" if _tool_round else last_human
+        prompt_text = _reuse_prompt if _cached_conv_uuid else _build_full_history_prompt()
 
         # When a skill is active, append a terse reminder directly in the user message.
         # The user-turn ending is where the model pays the most attention — this prevents
@@ -770,15 +793,17 @@ class ClaudeWebProvider(EnhancedProvider):
 
     def _split_messages(self, messages: List[Dict[str, Any]]):
         """Separate system prompt from human/assistant messages."""
-        system = ""
+        systems = []
         rest = []
         for m in messages:
             if m.get("role") == "system":
                 c = m.get("content", "")
-                system = c if isinstance(c, str) else (c[0].get("text", "") if c else "")
+                text = c if isinstance(c, str) else (c[0].get("text", "") if c else "")
+                if text:
+                    systems.append(text)
             else:
                 rest.append(m)
-        return system, rest
+        return "\n\n".join(systems), rest
 
     def get_available_models(self) -> List[str]:
         return list(self._FALLBACK_MODELS)

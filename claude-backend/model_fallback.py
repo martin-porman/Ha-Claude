@@ -280,12 +280,23 @@ def resolve_candidates(
     2. Agent-configured fallbacks (if agent_id provided)
     3. Global defaults fallbacks
     4. Global defaults primary (as last resort)
+
+    A native claude_code turn (CLAUDE_CODE_NATIVE_TOOLS) only falls back to
+    other claude_code models, never to another provider.
     """
     seen: set = set()
     candidates: List[ModelCandidate] = []
+    native_cc = False
+    if provider == "claude_code":
+        from providers.claude_code import native_tools_enabled
+        native_cc = native_tools_enabled()
 
     def _add(p: str, m: str) -> None:
         key = f"{p}/{m}"
+        if native_cc and p != "claude_code":
+            if p and m:
+                logger.info(f"ModelFallback: native claude_code turn, skipping fallback {key}")
+            return
         if key not in seen and p and m:
             seen.add(key)
             candidates.append(ModelCandidate(p, m))

@@ -103,6 +103,15 @@ def _load_settings() -> dict:
     return {}
 
 
+def _startup_settings_overlay() -> dict:
+    """Saved settings to apply over env values at startup.
+
+    Only keys actually present in settings.json are returned, so a key missing
+    from the file keeps its env/add-on-option value instead of SETTINGS_DEFAULTS.
+    """
+    return {k: v for k, v in _load_settings().items() if k in _SETTINGS_GLOBAL_MAP}
+
+
 def _save_settings(data: dict) -> None:
     """Atomic write to settings.json."""
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)

@@ -311,23 +311,52 @@ class PerplexityWebProvider(EnhancedProvider):
 
         from providers.tool_simulator import flatten_tool_messages
         msgs = flatten_tool_messages(messages)
+        # After a tool round the last turn is the assistant holding the [TOOL RESULT]
+        # blocks: end with a continuation user turn (same as github_copilot).
+        if msgs and msgs[-1].get("role") == "assistant":
+            msgs = list(msgs) + [{
+                "role": "user",
+                "content": (
+                    "Continue. Use the tool results above to provide "
+                    "the final answer to the user's original request."
+                ),
+            }]
+
+        # Flatten system messages + dialogue into one query (same style as gemini_web).
+        system_parts = []
+        history_parts = []
         user_text = ""
-        for m in reversed(msgs):
-            if (m.get("role") or "") == "user":
-                c = m.get("content")
-                if isinstance(c, str):
-                    user_text = c.strip()
-                elif isinstance(c, list):
-                    parts = []
-                    for p in c:
-                        if isinstance(p, dict) and p.get("type") == "text":
-                            t = p.get("text")
-                            if isinstance(t, str) and t.strip():
-                                parts.append(t.strip())
-                    user_text = "\n".join(parts).strip()
-                break
+        for m in msgs:
+            role = m.get("role") or ""
+            c = m.get("content")
+            text = ""
+            if isinstance(c, str):
+                text = c.strip()
+            elif isinstance(c, list):
+                parts = []
+                for p in c:
+                    if isinstance(p, dict) and p.get("type") == "text":
+                        t = p.get("text")
+                        if isinstance(t, str) and t.strip():
+                            parts.append(t.strip())
+                text = "\n".join(parts).strip()
+            if role == "system":
+                if text:
+                    system_parts.append(text)
+            elif role == "user":
+                user_text = text
+                history_parts.append(f"Human: {text}")
+            elif role == "assistant":
+                history_parts.append(f"Assistant: {text}")
         if not user_text:
             user_text = _default_user_text()
+        if len(history_parts) > 1:
+            history_block = "\n\n".join(history_parts[:-1])
+            user_text = (
+                f"[CONVERSATION HISTORY]\n{history_block}\n[/CONVERSATION HISTORY]\n\n"
+                f"Human: {user_text}"
+            )
+        system_text = "\n\n".join(system_parts)
 
         # Align with claude_web behavior: inject ToolSimulator instructions
         # so no-tool web providers emit <tool_call> blocks instead of plain prose.
@@ -351,6 +380,8 @@ class PerplexityWebProvider(EnhancedProvider):
                 )
             else:
                 prepend = ((intent_base_prompt.strip() + "\n\n") if intent_base_prompt else "") + sim_prompt
+            if system_text:
+                prepend = (prepend.strip() + "\n\n" + system_text) if prepend.strip() else system_text
             if prepend.strip():
                 user_text = (
                     "[SYSTEM INSTRUCTIONS — MUST FOLLOW]\n"

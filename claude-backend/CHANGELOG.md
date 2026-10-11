@@ -2,6 +2,29 @@
 
 > **⚠️ After updating, rebuild the add-on** (Settings → Add-ons → Amira → Rebuild) to apply new dependencies.
 
+## 4.8.1-native14 — MCP client works, web providers keep history, native fallback stays on Claude Code
+
+### MCP (Amira's own client)
+- **The official-SDK stdio client works.** `_submit` used `asyncio` without importing it (NameError on every connect), and mcp 2.x renamed `Tool.inputSchema` to `input_schema`. Both were hidden while `mcp.py` shadowed the SDK. Tested with a real stdio server round trip.
+- **Server names with `_` route correctly** (`mcp_<server>_<tool>` now matches the longest registered server name), also in the filesystem path clean-up in `tools.py`.
+- Removed `mcp_config.default.json` (unused; its only entry, `mcp.server.stdio.filesystem`, does not exist in the SDK).
+
+### Providers
+- **Claude.ai Web, Gemini Web, ChatGPT Web, Perplexity Web keep tool results and history.** After a tool round they end with a continuation turn instead of re-sending the original question; all system messages are kept (not only the first or last); Perplexity Web sends the conversation history instead of only the last message.
+- **Ollama** keeps system messages and assistant tool-call turns, no longer cuts the current message at 1000 characters (others at 8000), and the last-6 window never starts on an orphan tool result.
+- **Native Claude Code turns only fall back to other Claude Code models**, never to another provider.
+- Claude Code model list: added `claude-sonnet-5-5` and `claude-haiku-5-5` (all 10 listed models answered through the installed CLI 2.1.296).
+
+### Settings
+- **Keys missing from `settings.json` keep the add-on option / env value** instead of the built-in default (MCP/memory off, 10 conversations).
+- `max_conversations` accepts 1–5000 (same as `MAX_CONVERSATIONS`); a saved 500 was cut to 100.
+
+### UI
+- The agent editor hides "Allowed tools" for native Claude Code agents and says why.
+- Skill store: the upstream index (`Bobsilvio/ha-claude`) is gone (HTTP 404); the panel now says so instead of "check your internet connection".
+
+---
+
 ## 4.8.1-native13 — Agents per chat, per-agent memory, scheduler through Claude Code
 
 ### Documents and PDFs

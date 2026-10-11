@@ -6,6 +6,7 @@ Auto-discovers tools from MCP servers and registers them with the agent.
 Reference: https://modelcontextprotocol.io/
 """
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -101,14 +102,15 @@ class _OfficialMCPStdioClient:
         self._session = await self._exit_stack.enter_async_context(session)
         await self._session.initialize()
         response = await self._session.list_tools()
-        self._tools = [
-            {
+        self._tools = []
+        for t in response.tools:
+            # mcp 2.x renamed Tool.inputSchema to input_schema
+            schema = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)
+            self._tools.append({
                 "name": t.name,
                 "description": t.description or "",
-                "inputSchema": dict(t.inputSchema) if t.inputSchema else {},
-            }
-            for t in response.tools
-        ]
+                "inputSchema": dict(schema) if schema else {},
+            })
         return True
 
     async def _async_call_tool(self, name: str, arguments: Dict) -> str:
@@ -891,18 +893,19 @@ class MCPManager:
             Tool result as JSON string
         """
         try:
-            # Parse prefixed name: mcp_servername_toolname
-            parts = prefixed_tool_name.split("_", 2)
-            if len(parts) != 3 or parts[0] != "mcp":
+            # Parse prefixed name: mcp_servername_toolname. Server names may
+            # contain "_", so match the longest registered server-name prefix.
+            if not prefixed_tool_name.startswith("mcp_"):
                 return json.dumps({"error": f"Invalid tool name format: {prefixed_tool_name}"})
-            
-            server_name = parts[1]
-            tool_name = parts[2]
-            
+            suffix = prefixed_tool_name[len("mcp_"):]
+
             with self._lock:
-                if server_name not in self.servers:
-                    return json.dumps({"error": f"MCP server '{server_name}' not found"})
-                
+                matches = [n for n in self.servers if suffix.startswith(n + "_")]
+                if not matches:
+                    return json.dumps({"error": f"MCP server for tool '{prefixed_tool_name}' not found"})
+                server_name = max(matches, key=len)
+                tool_name = suffix[len(server_name) + 1:]
+
                 server = self.servers[server_name]
                 
                 # Validate arguments against tool schema

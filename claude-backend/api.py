@@ -40,8 +40,8 @@ import services.settings_service as settings_service
 from services.settings_service import (
     RUNTIME_SELECTION_FILE, SETTINGS_FILE, MCP_RUNTIME_FILE,
     SETTINGS_DEFAULTS, _SETTINGS_GLOBAL_MAP,
-    _load_settings, _save_settings, _load_mcp_runtime_state, _save_mcp_runtime_state,
-    _set_mcp_server_autostart
+    _save_settings, _load_mcp_runtime_state, _save_mcp_runtime_state,
+    _set_mcp_server_autostart, _startup_settings_overlay
 )
 import services.prompt_service as prompt_service
 from services.prompt_service import (
@@ -334,7 +334,7 @@ def _apply_settings(settings: dict) -> None:
                 value = default
             # Clamp specific ranges
             if key == "max_conversations":
-                value = max(1, min(100, value))
+                value = max(1, min(5000, value))  # same range as the MAX_CONVERSATIONS env
             elif key == "max_snapshots_per_file":
                 value = max(1, min(50, value))
             elif key == "timeout":
@@ -381,13 +381,9 @@ def _apply_settings(settings: dict) -> None:
             os.environ[gvar] = str(value)
 
 
-# Override env vars with settings.json if present (startup overlay)
-# Merge SETTINGS_DEFAULTS first so that any key not yet in settings.json
-# still gets its correct default (env vars from run script may disagree).
-_startup_settings = _load_settings()
-_merged_startup = {k: v for k, v in SETTINGS_DEFAULTS.items() if k in _SETTINGS_GLOBAL_MAP}
-_merged_startup.update(_startup_settings)  # user-saved values win
-_apply_settings(_merged_startup)
+# Override env vars with settings.json if present (startup overlay).
+# Only keys saved in settings.json apply; missing keys keep the env/add-on value.
+_apply_settings(_startup_settings_overlay())
 
 _LOG_LEVEL = logging.DEBUG if DEBUG_MODE else logging.INFO
 

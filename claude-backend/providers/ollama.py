@@ -180,19 +180,25 @@ class OllamaProvider(EnhancedProvider):
         _system_prompt = self._ollama_system_prompt()
         if _intent_prompt:
             _system_prompt = f"{_intent_prompt}\n\n{_system_prompt}"
+        # Keep incoming system messages: append them to the Ollama system prompt
+        for msg in messages:
+            if msg.get("role") == "system" and isinstance(msg.get("content"), str) and msg["content"].strip():
+                _system_prompt = f"{_system_prompt}\n\n{msg['content']}"
         msgs: List[Dict[str, Any]] = [
             {"role": "system", "content": _system_prompt}
         ]
-        for msg in messages:
+        _last_user_idx = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+        for _i, msg in enumerate(messages):
             role = msg.get("role", "")
-            # Skip system messages (already replaced above)
+            # Skip system messages (merged into the system prompt above)
             if role == "system":
                 continue
-            content = msg.get("content", "")
-            if content:
-                # Truncate very long user messages (smart-context can be huge)
-                if len(content) > 1000:
-                    content = content[:1000] + "\n[...troncato per Ollama]"
+            content = msg.get("content", "") or ""
+            if content or (role == "assistant" and msg.get("tool_calls")):
+                # Truncate very long older messages; never the current user message
+                # (it carries the memory/context block appended by api.py)
+                if _i != _last_user_idx and len(content) > 8000:
+                    content = content[:8000] + "\n[...troncato per Ollama]"
                 msg_out: Dict[str, Any] = {"role": role, "content": content}
                 if role == "assistant" and msg.get("tool_calls"):
                     msg_out["tool_calls"] = msg.get("tool_calls")
@@ -202,9 +208,13 @@ class OllamaProvider(EnhancedProvider):
                     if msg.get("name"):
                         msg_out["name"] = msg.get("name")
                 msgs.append(msg_out)
-        # Keep last 6 turns max to stay within small context window
+        # Keep last 6 turns max to stay within small context window;
+        # never start the window on a tool result orphaned from its tool call
         if len(msgs) > 7:  # 1 system + 6 turns
-            msgs = [msgs[0]] + msgs[-6:]
+            _start = len(msgs) - 6
+            while _start > 1 and msgs[_start].get("role") == "tool":
+                _start -= 1
+            msgs = [msgs[0]] + msgs[_start:]
 
         # ---- Sanitise messages for Ollama's template engine ----
         msgs = self._sanitize_messages(msgs)

@@ -823,6 +823,16 @@ class GeminiWebProvider(EnhancedProvider):
         # Normalise tool-call history → plain turns
         from providers.tool_simulator import flatten_tool_messages, get_simulator_system_prompt
         messages = flatten_tool_messages(messages)
+        # After a tool round the last turn is the assistant holding the [TOOL RESULT]
+        # blocks: end with a continuation user turn (same as github_copilot).
+        if messages and messages[-1].get("role") == "assistant":
+            messages = list(messages) + [{
+                "role": "user",
+                "content": (
+                    "Continue. Use the tool results above to provide "
+                    "the final answer to the user's original request."
+                ),
+            }]
         system_prompt, human_messages = self._split_messages(messages)
 
         # Build system prompt: tool simulator + intent + agent override
@@ -982,15 +992,17 @@ class GeminiWebProvider(EnhancedProvider):
         self, messages: List[Dict[str, Any]]
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """Separate system prompt from human/assistant messages."""
-        system = ""
+        systems: List[str] = []
         rest: List[Dict[str, Any]] = []
         for m in messages:
             if m.get("role") == "system":
                 c = m.get("content", "")
-                system = c if isinstance(c, str) else (c[0].get("text", "") if c else "")
+                text = c if isinstance(c, str) else (c[0].get("text", "") if c else "")
+                if text:
+                    systems.append(text)
             else:
                 rest.append(m)
-        return system, rest
+        return "\n\n".join(systems), rest
 
     def get_available_models(self) -> List[str]:
         return list(self._MODELS)

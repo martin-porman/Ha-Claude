@@ -29,7 +29,7 @@ _RESERVED_NAMES = {"help", "clear", "reset", "debug", "new", "abort"}
 _MAX_BODY_CHARS = 60000
 
 # Store cache: avoid hammering GitHub on every panel open
-_store_cache: dict = {"ts": 0.0, "data": None}
+_store_cache: dict = {"ts": 0.0, "data": None, "error": None}
 _store_lock = threading.Lock()
 _STORE_TTL = 300  # 5 minutes
 
@@ -171,18 +171,50 @@ def _http_get(url: str, timeout: int = 10) -> bytes:
             return r.read()
 
 
+class SkillStoreUnavailable(RuntimeError):
+    """The skill store index could not be fetched or parsed."""
+
+
+def _http_status(exc: Exception) -> Optional[int]:
+    """HTTP status from a requests or urllib HTTP error, else None."""
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None) or getattr(exc, "code", None)
+    return status if isinstance(status, int) else None
+
+
 def fetch_store_index(installed_names: Optional[set] = None) -> list[dict]:
-    """Fetch skills index from GitHub (cached 5 min). Raises on failure."""
+    """Fetch skills index from GitHub (cached 5 min).
+
+    Raises SkillStoreUnavailable with a user-readable message on failure;
+    failures are cached for the same TTL so GitHub is not hit on every open.
+    """
     with _store_lock:
         now = time.time()
+        if (now - _store_cache["ts"]) < _STORE_TTL and _store_cache.get("error"):
+            raise SkillStoreUnavailable(_store_cache["error"])
         if _store_cache["data"] is not None and (now - _store_cache["ts"]) < _STORE_TTL:
             skills = _store_cache["data"]
         else:
             import json
-            data = json.loads(_http_get(SKILLS_INDEX_URL).decode())
-            skills = data.get("skills", [])
-            _store_cache["ts"] = now
-            _store_cache["data"] = skills
+            try:
+                data = json.loads(_http_get(SKILLS_INDEX_URL).decode())
+                skills = data.get("skills", [])
+                if not isinstance(skills, list):
+                    raise ValueError("'skills' is not a list")
+            except Exception as e:
+                status = _http_status(e)
+                if status == 404:
+                    msg = (f"Skill store index not found (HTTP 404) at {SKILLS_INDEX_URL}. "
+                           "The store is unavailable; install skills manually into "
+                           f"{SKILLS_DIR}/<name>/SKILL.md.")
+                elif status:
+                    msg = f"Skill store unavailable (HTTP {status}) at {SKILLS_INDEX_URL}."
+                else:
+                    msg = f"Skill store unavailable: {e}"
+                logger.warning(f"Skills: {msg}")
+                _store_cache.update(ts=now, data=None, error=msg)
+                raise SkillStoreUnavailable(msg) from e
+            _store_cache.update(ts=now, data=skills, error=None)
 
     if installed_names is not None:
         for s in skills:

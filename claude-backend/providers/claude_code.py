@@ -402,7 +402,8 @@ class ClaudeCodeProvider(EnhancedProvider):
     """Claude subscription via the official Claude Code CLI (headless)."""
 
     _MODELS = ["sonnet", "opus", "fable", "haiku",
-               "claude-opus-5-5", "claude-sonnet-5", "claude-fable-5-1", "claude-haiku-4-5"]
+               "claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-fable-5-1",
+               "claude-haiku-5-5", "claude-haiku-4-5"]
 
     def __init__(self, api_key: str = "", model: str = ""):
         super().__init__(api_key, model)

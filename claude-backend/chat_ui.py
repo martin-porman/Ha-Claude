@@ -208,7 +208,8 @@ def get_chat_ui():
             "skills_empty": "No skills installed. Browse the store below.",
             "skills_store_empty": "No skills available in the store.",
             "skills_store_loading": "Loading store...",
-            "skills_store_error": "Could not load the store. Check your internet connection.",
+            "skills_store_error": "Could not load the store.",
+            "agent_tools_native_note": "Does not apply to Claude Code: the CLI uses its own tools.",
             "skills_unavailable": "Skills not available. Please restart the add-on.",
             "skills_update_banner": "Skill update available:",
             "skills_update_go": "Go to Skills",
@@ -344,7 +345,7 @@ def get_chat_ui():
             "settings_desc_discord_allowed_user_ids": "Comma-separated Discord user IDs allowed to use the bot. Leave empty to allow all users.",
             "settings_desc_timeout": "API request timeout in seconds (default 30, increase if responses are slow)",
             "settings_desc_max_retries": "Maximum retry attempts for failed API calls (default 3)",
-            "settings_desc_max_conversations": "Maximum number of chat conversations to keep in history (1\u2013100)",
+            "settings_desc_max_conversations": "Maximum number of chat conversations to keep in history (1\u20135000)",
             "settings_desc_max_snapshots_per_file": "Maximum backup snapshots per file. Oldest backups are auto-deleted when the limit is reached.",
             "settings_desc_cost_currency": "Currency for token cost display",
             "models_group_fixed": "Fixed",
@@ -554,7 +555,8 @@ def get_chat_ui():
             "skills_empty": "Nessuna skill installata. Sfoglia lo store qui sotto.",
             "skills_store_empty": "Nessuna skill disponibile nello store.",
             "skills_store_loading": "Caricamento store...",
-            "skills_store_error": "Impossibile caricare lo store. Controlla la connessione internet.",
+            "skills_store_error": "Impossibile caricare lo store.",
+            "agent_tools_native_note": "Non si applica a Claude Code: la CLI usa i propri strumenti.",
             "skills_unavailable": "Skills non disponibili. Riavvia l'add-on.",
             "skills_update_banner": "Aggiornamento skill disponibile:",
             "skills_update_go": "Vai alle Skill",
@@ -690,7 +692,7 @@ def get_chat_ui():
             "settings_desc_discord_allowed_user_ids": "Lista ID utenti Discord autorizzati separati da virgola. Lascia vuoto per permettere tutti gli utenti.",
             "settings_desc_timeout": "Timeout richieste API in secondi (predefinito 30, aumenta se le risposte sono lente)",
             "settings_desc_max_retries": "Numero massimo di tentativi per chiamate API fallite (predefinito 3)",
-            "settings_desc_max_conversations": "Numero massimo di conversazioni da mantenere nello storico (1\u2013100)",
+            "settings_desc_max_conversations": "Numero massimo di conversazioni da mantenere nello storico (1\u20135000)",
             "settings_desc_max_snapshots_per_file": "Numero massimo di backup per file. I pi\u00f9 vecchi vengono eliminati automaticamente al raggiungimento del limite.",
             "settings_desc_cost_currency": "Valuta per la visualizzazione dei costi token",
             "models_group_fixed": "Fissi",
@@ -900,7 +902,8 @@ def get_chat_ui():
             "skills_empty": "No hay skills instaladas. Explora la tienda a continuación.",
             "skills_store_empty": "No hay skills disponibles en la tienda.",
             "skills_store_loading": "Cargando tienda...",
-            "skills_store_error": "No se pudo cargar la tienda. Comprueba tu conexión a internet.",
+            "skills_store_error": "No se pudo cargar la tienda.",
+            "agent_tools_native_note": "No se aplica a Claude Code: la CLI usa sus propias herramientas.",
             "skills_unavailable": "Skills no disponibles. Reinicia el add-on.",
             "skills_update_banner": "Actualización de skill disponible:",
             "skills_update_go": "Ir a Skills",
@@ -1034,7 +1037,7 @@ def get_chat_ui():
             "settings_desc_discord_allowed_user_ids": "Lista de IDs de usuarios de Discord permitidos, separados por coma. Dejar vac\u00edo para permitir todos los usuarios.",
             "settings_desc_timeout": "Tiempo de espera de solicitudes API en segundos (predeterminado 30, aumentar si las respuestas son lentas)",
             "settings_desc_max_retries": "N\u00famero m\u00e1ximo de intentos para llamadas API fallidas (predeterminado 3)",
-            "settings_desc_max_conversations": "N\u00famero m\u00e1ximo de conversaciones en el historial (1\u2013100)",
+            "settings_desc_max_conversations": "N\u00famero m\u00e1ximo de conversaciones en el historial (1\u20135000)",
             "settings_desc_max_snapshots_per_file": "N\u00famero m\u00e1ximo de copias de seguridad por archivo. Las m\u00e1s antiguas se eliminan autom\u00e1ticamente.",
             "settings_desc_cost_currency": "Moneda para mostrar los costes de tokens",
             "models_group_fixed": "Fijos",
@@ -1244,7 +1247,8 @@ def get_chat_ui():
             "skills_empty": "Aucune skill installée. Parcourez la boutique ci-dessous.",
             "skills_store_empty": "Aucune skill disponible dans la boutique.",
             "skills_store_loading": "Chargement de la boutique...",
-            "skills_store_error": "Impossible de charger la boutique. Vérifiez votre connexion internet.",
+            "skills_store_error": "Impossible de charger la boutique.",
+            "agent_tools_native_note": "Ne s'applique pas à Claude Code : la CLI utilise ses propres outils.",
             "skills_unavailable": "Skills non disponibles. Redémarrez l'add-on.",
             "skills_update_banner": "Mise à jour de skill disponible :",
             "skills_update_go": "Aller aux Skills",
@@ -1376,7 +1380,7 @@ def get_chat_ui():
             "settings_desc_discord_allowed_user_ids": "Liste d'IDs d'utilisateurs Discord autoris\u00e9s, s\u00e9par\u00e9s par virgule. Laisser vide pour autoriser tous les utilisateurs.",
             "settings_desc_timeout": "D\u00e9lai d'attente des requ\u00eates API en secondes (par d\u00e9faut 30, augmenter si les r\u00e9ponses sont lentes)",
             "settings_desc_max_retries": "Nombre maximal de tentatives pour les appels API \u00e9chou\u00e9s (par d\u00e9faut 3)",
-            "settings_desc_max_conversations": "Nombre maximal de conversations dans l'historique (1\u2013100)",
+            "settings_desc_max_conversations": "Nombre maximal de conversations dans l'historique (1\u20135000)",
             "settings_desc_max_snapshots_per_file": "Nombre maximal de sauvegardes par fichier. Les plus anciennes sont supprim\u00e9es automatiquement.",
             "settings_desc_cost_currency": "Devise pour l'affichage des co\u00fbts de tokens",
             "models_group_fixed": "Fixes",
@@ -5269,6 +5273,8 @@ def get_chat_ui():
             // Tools (multiselect chips)
             form.innerHTML += '<div class="agent-form-group"><label>' + _lbl(T.agent_tools || 'Allowed Tools', 'tip_agent_tools')
                 + ' <span style="font-weight:normal;font-size:10px;color:#999;">(' + (T.agent_tools_hint || 'empty = all') + ')</span></label>'
+                + '<div id="af_tools_native_note" style="display:none;font-size:11px;color:#999;">'
+                + (T.agent_tools_native_note || 'Does not apply to Claude Code: the CLI uses its own tools.') + '</div>'
                 + '<div class="agent-tools-grid" id="af_tools"></div></div>';
 
             // Default + Enabled checkboxes
@@ -5415,6 +5421,17 @@ def get_chat_ui():
                 chip.addEventListener('click', () => chip.classList.toggle('selected'));
                 toolsGrid.appendChild(chip);
             }});
+            // Native Claude Code runs the CLI's own tools: Amira tool names have no effect there.
+            // The chips stay in the DOM (hidden) so saving keeps the agent's stored list.
+            let _ccNative = false;
+            const toolsNativeNote = document.getElementById('af_tools_native_note');
+            function _syncToolsNative() {{
+                const native = _ccNative && (provSel.value || currentProviderId) === 'claude_code';
+                toolsGrid.style.display = native ? 'none' : '';
+                toolsNativeNote.style.display = native ? '' : 'none';
+            }}
+            provSel.addEventListener('change', _syncToolsNative);
+            fetchClaudeCodeInventory().then(inv => {{ _ccNative = !!(inv && inv.native); _syncToolsNative(); }});
 
             // Save handler
             document.getElementById('af_save').addEventListener('click', async () => {{
